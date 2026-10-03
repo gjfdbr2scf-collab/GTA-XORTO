@@ -3,7 +3,8 @@ TARGET = EBOOT.PBP
 OBJS = src/main.o \
        src/game.o \
        src/psp_game.o \
-       src/psp_input.o
+       src/psp_input.o \
+       mainmenu.o
 
 INCDIR = include
 
@@ -21,3 +22,7 @@ PSP_FW_VERSION = 600
 PSPSDK = $(shell psp-config --pspsdk-path)
 
 include $(PSPSDK)/lib/build.mak
+
+
+mainmenu.o: assets/MainMenu.raw
+	bin2o -i assets/MainMenu.raw mainmenu.o MainMenu
