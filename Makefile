@@ -10,8 +10,13 @@ INCDIR = include
 CFLAGS = -O2 -G0 -Wall
 ASFLAGS = $(CFLAGS)
 
+LIBS = -lpspgu
+
 EXTRA_TARGETS = EBOOT.PBP
-PSP_EBOOT_TITLE = Yenzangs Trip
+
+PSP_EBOOT_TITLE = Ginseng Strip GTA
+
+PSP_FW_VERSION = 600
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 
