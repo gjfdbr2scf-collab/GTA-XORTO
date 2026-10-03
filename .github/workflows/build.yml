@@ -1,4 +1,4 @@
-name: Build
+name: PSP Build
 
 on:
   push:
@@ -16,10 +16,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check project files
+      - name: Set up PSP SDK
+        uses: pspdev/pspdev@main
+
+      - name: Build PSP game
         run: |
-          test -f Makefile
-          test -f src/main.c
-          test -f src/game.c
-          test -f include/game.h
-          echo "Project structure OK"
+          make clean
+          make
+
+      - name: Check EBOOT.PBP
+        run: |
+          test -f EBOOT.PBP
+          echo "EBOOT.PBP successfully created."
+
+      - name: Upload EBOOT.PBP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yenzangs-Trip-PSP
+          path: EBOOT.PBP
