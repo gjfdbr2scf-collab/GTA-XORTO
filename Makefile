@@ -6,11 +6,9 @@ OBJS = src/main.o \
        src/psp_input.o
 
 INCDIR = include
-CFLAGS = -O2 -G0 -Wall -I$(INCDIR)
-CXXFLAGS = $(CFLAGS)
-ASFLAGS = $(CFLAGS)
 
-LIBS =
+CFLAGS = -O2 -G0 -Wall
+ASFLAGS = $(CFLAGS)
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = Yenzangs Trip
