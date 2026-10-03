@@ -12,12 +12,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    container:
+      image: pspdev/pspdev:latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up PSP SDK
-        uses: pspdev/pspdev@main
+      - name: Check PSP toolchain
+        run: |
+          psp-gcc --version
+          psp-config --pspsdk-path
+          pack-pbp --help
 
       - name: Build PSP game
         run: |
