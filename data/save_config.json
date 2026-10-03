@@ -1,0 +1,8 @@
+{
+  "save_system": {
+    "storage": "SD card",
+    "save_game": true,
+    "save_name": true,
+    "save_language": true
+  }
+}
