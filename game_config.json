@@ -1,0 +1,51 @@
+{
+"platform": "PSP",
+"game_title": "Yenzangs Trip",
+"main_menu": [
+"Story Mode",
+"Free Open World",
+"Multiplayer",
+"System Settings"
+],
+"controls": {
+"type": "N64-style joystick",
+"dpad_alternative": false
+},
+"multiplayer": {
+"type": "local",
+"online": false,
+"players": 3,
+"characters": [
+"Setzmann",
+"Sermijan",
+"Sefkan"
+],
+"random_character_assignment": true
+},
+"save_system": {
+"storage": "SD card",
+"save_game": true,
+"save_name": true,
+"save_language": true
+},
+"open_world": {
+"location": "Peine",
+"day_night_cycle": true,
+"public_transport": [
+"Train",
+"Bus"
+],
+"aldis": true,
+"forced_story_progression": false
+},
+"system_settings": [
+"Bildschirm",
+"Audio",
+"Steuerung",
+"Sprache",
+"Datum",
+"Uhrzeit",
+"Systeminfo",
+"Auf Standardeinstellung zurücksetzen"
+]
+}
