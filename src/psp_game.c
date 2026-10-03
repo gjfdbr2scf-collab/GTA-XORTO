@@ -1,11 +1,18 @@
 #include <pspkernel.h>
-#include <pspdebug.h>
 #include <pspdisplay.h>
+#include <pspgu.h>
+#include <pspdebug.h>
 
 #include "psp_game.h"
 #include "psp_input.h"
 
+#define SCREEN_WIDTH  480
+#define SCREEN_HEIGHT 272
+#define BUFFER_WIDTH 512
+
 #define MENU_COUNT 4
+
+static unsigned int __attribute__((aligned(16))) display_list[262144];
 
 static int game_initialized = 0;
 static int selected_menu = 0;
@@ -15,7 +22,7 @@ static const char *menu_items[MENU_COUNT] =
 {
     "STORY MODE",
     "FREE OPEN WORLD",
-    "MULTIPLAYER",
+    "MULTIPLAYER (LOCAL)",
     "SYSTEM SETTINGS"
 };
 
@@ -25,9 +32,59 @@ int psp_game_init(void)
 
     pspDebugScreenInit();
 
-    pspDebugScreenSetBackColor(0x101018);
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenClear();
+    /*
+     * PSP-Grafik wieder genauso initialisieren
+     * wie beim funktionierenden roten Test.
+     */
+    sceGuInit();
+
+    sceGuStart(GU_DIRECT, display_list);
+
+    sceGuDrawBuffer(
+        GU_PSM_5650,
+        (void *)0,
+        BUFFER_WIDTH
+    );
+
+    sceGuDispBuffer(
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+        (void *)(BUFFER_WIDTH * SCREEN_HEIGHT * 2),
+        BUFFER_WIDTH
+    );
+
+    sceGuOffset(
+        2048 - (SCREEN_WIDTH / 2),
+        2048 - (SCREEN_HEIGHT / 2)
+    );
+
+    sceGuViewport(
+        2048,
+        2048,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT
+    );
+
+    sceGuScissor(
+        0,
+        0,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT
+    );
+
+    sceGuEnable(GU_SCISSOR_TEST);
+    sceGuDisable(GU_DEPTH_TEST);
+
+    sceGuFinish();
+
+    sceGuSync(
+        GU_SYNC_FINISH,
+        GU_SYNC_WHAT_DONE
+    );
+
+    sceDisplayWaitVblankStart();
+
+    sceGuDisplay(GU_TRUE);
 
     game_initialized = 1;
     selected_menu = 0;
@@ -49,10 +106,6 @@ void psp_game_update(void)
 
     input = psp_input_get_state();
 
-    /*
-     * Kleine Sperre gegen zu schnelles
-     * mehrfaches Umschalten.
-     */
     if (button_lock > 0)
     {
         button_lock--;
@@ -82,13 +135,12 @@ void psp_game_update(void)
         button_lock = 8;
     }
 
-    /*
-     * X waehlt den aktuellen Menuepunkt aus.
-     * Die eigentlichen Spielbereiche werden
-     * in den naechsten Schritten eingebaut.
-     */
     if (input->cross)
     {
+        /*
+         * Die eigentlichen Menüseiten kommen
+         * im nächsten Schritt.
+         */
         button_lock = 12;
     }
 }
@@ -102,56 +154,103 @@ void psp_game_render(void)
         return;
     }
 
-    pspDebugScreenClear();
-
     /*
-     * Titel
+     * GU-Framebuffer löschen.
+     * Dunkler Hintergrund statt schwarzem
+     * "hängenden" Bildschirm.
      */
-    pspDebugScreenSetXY(2, 1);
-    pspDebugScreenPrintf("GINSENG STRIP GTA");
+    sceGuStart(GU_DIRECT, display_list);
 
-    pspDebugScreenSetXY(2, 2);
-    pspDebugScreenPrintf("------------------------------");
+    sceGuClearColor(0x202020FF);
 
-    /*
-     * Hauptmenue
-     */
-    for (i = 0; i < MENU_COUNT; i++)
-    {
-        pspDebugScreenSetXY(5, 5 + (i * 2));
+    sceGuClear(
+        GU_COLOR_BUFFER_BIT
+    );
 
-        if (i == selected_menu)
-        {
-            pspDebugScreenSetTextColor(0xFFFFFFFF);
-            pspDebugScreenPrintf("> %s <", menu_items[i]);
-        }
-        else
-        {
-            pspDebugScreenSetTextColor(0xFFAAAAAA);
-            pspDebugScreenPrintf("  %s", menu_items[i]);
-        }
-    }
+    sceGuFinish();
+
+    sceGuSync(
+        GU_SYNC_FINISH,
+        GU_SYNC_WHAT_DONE
+    );
 
     /*
-     * Bedienhinweise
+     * Debug-Menü auf den Bildschirm schreiben.
      */
     pspDebugScreenSetTextColor(0xFFFFFFFF);
 
+    pspDebugScreenSetXY(2, 1);
+    pspDebugScreenPrintf(
+        "GINSENG STRIP 2007"
+    );
+
+    pspDebugScreenSetXY(2, 2);
+    pspDebugScreenPrintf(
+        "------------------------------"
+    );
+
+    for (i = 0; i < MENU_COUNT; i++)
+    {
+        pspDebugScreenSetXY(
+            4,
+            5 + (i * 2)
+        );
+
+        if (i == selected_menu)
+        {
+            pspDebugScreenSetTextColor(
+                0xFFFFFFFF
+            );
+
+            pspDebugScreenPrintf(
+                "> %s <",
+                menu_items[i]
+            );
+        }
+        else
+        {
+            pspDebugScreenSetTextColor(
+                0xFFAAAAAA
+            );
+
+            pspDebugScreenPrintf(
+                "  %s",
+                menu_items[i]
+            );
+        }
+    }
+
+    pspDebugScreenSetTextColor(
+        0xFFFFFFFF
+    );
+
     pspDebugScreenSetXY(3, 16);
-    pspDebugScreenPrintf("UP/DOWN  = AUSWAHL");
+    pspDebugScreenPrintf(
+        "UP / DOWN = AUSWAHL"
+    );
 
-    pspDebugScreenSetXY(3, 17);
-    pspDebugScreenPrintf("X        = AUSWAHL BESTAETIGEN");
+    pspDebugScreenSetXY(3, 18);
+    pspDebugScreenPrintf(
+        "X = BESTAETIGEN"
+    );
 
-    pspDebugScreenSetXY(3, 19);
-    pspDebugScreenPrintf("GINSENG STRIP GTA - PSP EDITION");
+    pspDebugScreenSetXY(3, 20);
+    pspDebugScreenPrintf(
+        "GINSENG STRIP GTA - PSP EDITION"
+    );
 
     sceDisplayWaitVblankStart();
+
+    sceGuSwapBuffers();
 }
 
 void psp_game_shutdown(void)
 {
     psp_input_shutdown();
+
+    sceGuDisplay(GU_FALSE);
+
+    sceGuTerm();
 
     game_initialized = 0;
 }
