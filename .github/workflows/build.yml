@@ -23,7 +23,7 @@ jobs:
         run: |
           psp-gcc --version
           psp-config --pspsdk-path
-          pack-pbp --help
+          command -v pack-pbp
 
       - name: Build PSP game
         run: |
