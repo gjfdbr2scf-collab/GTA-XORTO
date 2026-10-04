@@ -1,4 +1,5 @@
 #include <pspkernel.h>
+#include <psppower.h>
 #include <pspctrl.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
@@ -2593,6 +2594,7 @@ static void render_game_hud(
 
 int psp_game_init(void)
 {
+    /* Leave the PSP clock at the system/emulator default. */
     sceCtrlSetSamplingCycle(0);
 
     sceCtrlSetSamplingMode(
