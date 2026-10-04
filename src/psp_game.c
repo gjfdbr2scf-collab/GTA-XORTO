@@ -10,30 +10,35 @@
 #include <math.h>
 #include <string.h>
 
+#include "psp_game.h"
+
 /*
  * GINSENG STRIP 2002
  *
- * Self-contained PSP game core:
- * - Title / PRESS START
- * - Language selection
- * - Save File / Saving / Finish Save
- * - Main Menu
- * - Story Mode
- * - Free Open World
- * - Local Co-Op prototype
- * - System Settings
- * - Peaceful 3D third-person city
- * - Walk / drive
- * - Music only from Main Menu / playable game states
+ * Target presentation:
  * - 480x272 PSP framebuffer
+ * - third-person 3D camera
+ * - peaceful city exploration
+ * - classic early-2000s console / PS2-style low-poly look
  *
- * This file uses the PSP GU/GUM 3D API for the world. PSP GUM provides
- * perspective, look-at camera, matrix transforms and 3D array drawing.
+ * Flow:
+ * TITLE -> LANGUAGE -> SAVE -> SAVING -> FINISH SAVE -> MAIN MENU
+ *
+ * Main Menu:
+ * STORY MODE
+ * FREE OPEN WORLD
+ * MULTIPLAYER (LOCAL)
+ * SYSTEM SETTINGS
+ *
+ * Story:
+ * cinematic van intro -> two brothers exit -> cousin opens door
+ * -> player takes control -> walk together through Peine -> bridge
+ *
+ * Music:
+ * title/language/save/intro = OFF
+ * main menu/playable states = ON
  */
 
-#include "psp_game.h"
-
-/* Embedded assets. These names match the Makefile bin2o targets. */
 extern const unsigned char Title_start[];
 extern const unsigned char LanguageSelection_start[];
 extern const unsigned char MainMenu_start[];
@@ -48,7 +53,8 @@ extern const unsigned char Music_end[];
 #define SCREEN_HEIGHT 272
 #define BUF_WIDTH     512
 
-#define PI_F 3.14159265358979323846f
+#define PI_F 3.14159265359f
+#define DEG_TO_RAD 0.017453292519943295f
 
 /* ------------------------------------------------------------------------- */
 /* Save                                                                      */
@@ -62,7 +68,7 @@ typedef struct
 {
     unsigned int magic;
     int language;
-    char username[32]; /* kept for compatibility with old saves */
+    char username[32]; /* kept for compatibility */
 } SaveData;
 
 /* ------------------------------------------------------------------------- */
@@ -89,7 +95,7 @@ typedef enum
 /* ------------------------------------------------------------------------- */
 
 static unsigned int __attribute__((aligned(64)))
-    list[0x20000 / 4];
+    list[0x22000 / 4];
 
 static GameState state = GAME_STATE_TITLE;
 static int game_initialized = 0;
@@ -99,20 +105,23 @@ static int selected_menu = 0;
 static int settings_selection = 0;
 
 static unsigned int old_buttons = 0;
+
 static SaveData save_data;
 
-/* Fade */
+/* ------------------------------------------------------------------------- */
+/* Fade / save timing                                                        */
+/* ------------------------------------------------------------------------- */
+
 static int transition_active = 0;
 static int transition_phase = 0;
 static int transition_alpha = 0;
 static GameState transition_target = GAME_STATE_TITLE;
 
-/* Save messages */
 static int saving_timer = 0;
 static int save_finished_timer = 0;
 
 /* ------------------------------------------------------------------------- */
-/* Music                                                                    */
+/* Music                                                                     */
 /* ------------------------------------------------------------------------- */
 
 #define MUSIC_RATE    22050
@@ -127,44 +136,64 @@ static short __attribute__((aligned(64)))
     music_buffer[MUSIC_SAMPLES];
 
 /* ------------------------------------------------------------------------- */
-/* 3D player / vehicle                                                       */
+/* Story cinematic                                                           */
+/* ------------------------------------------------------------------------- */
+
+static int intro_frame = 0;
+
+/* 0 = van approaches, 1 = parks, 2 = brothers exit, 3 = walk to door,
+ * 4 = cousin opens, 5 = handoff to player */
+static int intro_phase = 0;
+
+#define INTRO_PHASE_APPROACH 240
+#define INTRO_PHASE_PARK      90
+#define INTRO_PHASE_EXIT     150
+#define INTRO_PHASE_WALK     180
+#define INTRO_PHASE_DOOR     120
+#define INTRO_TOTAL (INTRO_PHASE_APPROACH + INTRO_PHASE_PARK + \
+                     INTRO_PHASE_EXIT + INTRO_PHASE_WALK + INTRO_PHASE_DOOR)
+
+/* Van */
+static float intro_van_x = -42.0f;
+static float intro_van_z = 8.0f;
+static float intro_van_yaw = PI_F * 0.5f;
+
+/* Brothers in intro */
+static float intro_bro1_x = 0.0f;
+static float intro_bro1_z = 0.0f;
+static float intro_bro2_x = 0.0f;
+static float intro_bro2_z = 0.0f;
+
+/* Cousin */
+static int cousin_door_open = 0;
+
+/* ------------------------------------------------------------------------- */
+/* Player / vehicle                                                          */
 /* ------------------------------------------------------------------------- */
 
 static float player_x = 0.0f;
 static float player_y = 0.0f;
-static float player_z = 0.0f;
-
+static float player_z = 2.0f;
 static float player_yaw = 0.0f;
+
+static float brother_x = -2.0f;
+static float brother_y = 0.0f;
+static float brother_z = 4.5f;
+static float brother_yaw = 0.0f;
 
 static int in_vehicle = 0;
 static int current_vehicle = -1;
 
-static float player2_x = -3.0f;
+/* Local second player */
+static float player2_x = 4.0f;
 static float player2_y = 0.0f;
-static float player2_z = 2.0f;
-static float player2_yaw = 0.0f;
-
-/* ------------------------------------------------------------------------- */
-/* Story                                                                     */
-/* ------------------------------------------------------------------------- */
+static float player2_z = 4.5f;
+static float player2_yaw = PI_F;
 
 static int story_step = 0;
-static int flower_collected = 0;
-
-/* Story intro: blue family van arrives, stops, three boys exit, cousin opens. */
-static int story_intro_timer = 0;
-static float intro_van_x = -32.0f;
-static float intro_van_z = 4.0f;
-static float intro_boy1_x = -4.0f;
-static float intro_boy1_z = 4.0f;
-static float intro_boy2_x = -4.0f;
-static float intro_boy2_z = 4.0f;
-static float intro_boy3_x = -4.0f;
-static float intro_boy3_z = 4.0f;
-static int intro_door_open = 0;
 
 /* ------------------------------------------------------------------------- */
-/* 3D camera                                                                 */
+/* Camera                                                                    */
 /* ------------------------------------------------------------------------- */
 
 static ScePspFVector3 camera_eye;
@@ -172,7 +201,7 @@ static ScePspFVector3 camera_center;
 static ScePspFVector3 camera_up;
 
 /* ------------------------------------------------------------------------- */
-/* City data                                                                 */
+/* City                                                                      */
 /* ------------------------------------------------------------------------- */
 
 typedef struct
@@ -182,36 +211,45 @@ typedef struct
     float w;
     float d;
     float h;
-    unsigned int color;
+    unsigned int wall;
+    unsigned int roof;
 } Building;
 
 static const Building buildings[] =
 {
-    { -36.0f, -34.0f, 18.0f, 18.0f, 16.0f, 0xffd9b47b },
-    {   4.0f, -38.0f, 22.0f, 14.0f, 11.0f, 0xffc9d8e2 },
-    {  34.0f, -36.0f, 18.0f, 19.0f, 20.0f, 0xffe5c5a5 },
+    { -42.0f, -42.0f, 18.0f, 16.0f, 12.0f, 0xffd7c1a8, 0xff8d5b4e },
+    { -15.0f, -44.0f, 20.0f, 18.0f, 16.0f, 0xffbfcfd8, 0xff6c747b },
+    {  18.0f, -43.0f, 22.0f, 16.0f, 14.0f, 0xffe2c4a7, 0xff8d6251 },
+    {  45.0f, -43.0f, 20.0f, 17.0f, 18.0f, 0xffc4c9b8, 0xff77745f },
 
-    { -42.0f,  -2.0f, 14.0f, 20.0f,  8.0f, 0xffc8b58d },
-    {  42.0f,   4.0f, 20.0f, 18.0f, 14.0f, 0xffc7d1b6 },
+    { -44.0f, -12.0f, 16.0f, 18.0f, 10.0f, 0xffd5bb96, 0xff9a604d },
+    {  43.0f, -10.0f, 19.0f, 18.0f, 15.0f, 0xffb8c8d3, 0xff6d7680 },
 
-    { -38.0f,  34.0f, 20.0f, 20.0f, 17.0f, 0xffd5a475 },
-    {   2.0f,  38.0f, 20.0f, 16.0f, 12.0f, 0xffb9c9d8 },
-    {  38.0f,  36.0f, 18.0f, 19.0f, 22.0f, 0xffd8b8a0 },
+    { -44.0f,  17.0f, 18.0f, 19.0f, 18.0f, 0xffd9b09f, 0xff79584f },
+    {  44.0f,  17.0f, 18.0f, 19.0f, 13.0f, 0xffd6cfaa, 0xff7a6749 },
 
-    { -78.0f, -72.0f, 24.0f, 18.0f, 11.0f, 0xffd9c4a6 },
-    { -46.0f, -72.0f, 18.0f, 18.0f, 13.0f, 0xffe0d2b8 },
-    {   0.0f, -72.0f, 24.0f, 18.0f, 15.0f, 0xffd4b0a0 },
-    {  42.0f, -72.0f, 18.0f, 18.0f, 10.0f, 0xffc6d0d8 },
+    { -44.0f,  46.0f, 19.0f, 17.0f, 14.0f, 0xffb9cbd7, 0xff6f747d },
+    { -15.0f,  44.0f, 20.0f, 18.0f, 18.0f, 0xffe0c5a9, 0xff8d5c4e },
+    {  16.0f,  44.0f, 19.0f, 18.0f, 11.0f, 0xffd4d9bd, 0xff6d765e },
+    {  45.0f,  44.0f, 18.0f, 18.0f, 16.0f, 0xffd7b7a1, 0xff7e5149 },
 
-    { -76.0f,  72.0f, 22.0f, 18.0f, 10.0f, 0xffc9b78f },
-    { -43.0f,  72.0f, 18.0f, 18.0f, 16.0f, 0xffd7b5a6 },
-    {   0.0f,  72.0f, 22.0f, 20.0f, 18.0f, 0xffbecbaf },
-    {  42.0f,  72.0f, 20.0f, 18.0f, 13.0f, 0xffcdb9d1 },
+    { -75.0f, -72.0f, 20.0f, 18.0f, 10.0f, 0xffceb18d, 0xff8d5e47 },
+    { -47.0f, -72.0f, 19.0f, 18.0f, 13.0f, 0xffd4c3ad, 0xff7a6e59 },
+    { -18.0f, -72.0f, 22.0f, 19.0f, 16.0f, 0xffbac9d2, 0xff6a7480 },
+    {  16.0f, -72.0f, 21.0f, 18.0f, 12.0f, 0xffd7c6aa, 0xff8b614f },
+    {  46.0f, -72.0f, 19.0f, 18.0f, 18.0f, 0xffc9d3bd, 0xff707961 },
 
-    {  76.0f, -28.0f, 14.0f, 22.0f, 18.0f, 0xffb9c4d8 },
-    {  75.0f,  26.0f, 16.0f, 20.0f, 14.0f, 0xffe0bd89 },
-    { -74.0f, -22.0f, 16.0f, 22.0f, 19.0f, 0xffc9d0b5 },
-    { -76.0f,  24.0f, 18.0f, 20.0f, 12.0f, 0xffd1b9a8 }
+    { -75.0f,  72.0f, 22.0f, 18.0f, 12.0f, 0xffd7c3a9, 0xff8b6253 },
+    { -45.0f,  72.0f, 20.0f, 18.0f, 16.0f, 0xffbacbd3, 0xff6f7880 },
+    { -15.0f,  72.0f, 19.0f, 17.0f, 11.0f, 0xffd2d1ba, 0xff7e735a },
+    {  15.0f,  72.0f, 22.0f, 18.0f, 17.0f, 0xffe0c0a5, 0xff8a584d },
+    {  46.0f,  72.0f, 20.0f, 18.0f, 13.0f, 0xffbdcad8, 0xff6b7482 },
+
+    { -75.0f,  10.0f, 17.0f, 20.0f, 17.0f, 0xffd3baa3, 0xff80584b },
+    {  75.0f,  10.0f, 17.0f, 20.0f, 20.0f, 0xffc8d2bc, 0xff647062 },
+
+    { -75.0f,  40.0f, 17.0f, 18.0f, 10.0f, 0xffc6c8cf, 0xff6f6b73 },
+    {  75.0f,  42.0f, 17.0f, 18.0f, 15.0f, 0xffdcb693, 0xff855d4f }
 };
 
 #define BUILDING_COUNT ((int)(sizeof(buildings) / sizeof(buildings[0])))
@@ -222,187 +260,78 @@ typedef struct
     float z;
     float yaw;
     float speed;
-    unsigned int color;
+    unsigned int body;
 } CityCar;
 
 static CityCar cars[] =
 {
-    { -20.0f,  -4.0f, 0.0f, 4.0f, 0xffc7372f },
-    {  18.0f,  12.0f, PI_F, 4.5f, 0xfff0d54e },
-    {  58.0f, -46.0f, PI_F * 0.5f, 3.8f, 0xff3d77b5 },
-    { -58.0f,  48.0f, PI_F * 1.5f, 3.4f, 0xffe8e8e8 }
+    { -24.0f,  0.0f,  0.0f,  0.0f, 0xffc23c35 },
+    {  24.0f,  0.0f, PI_F,    0.0f, 0xffd6b640 },
+    {  0.0f,  30.0f, PI_F*0.5f, 0.0f, 0xff507fb6 },
+    {  0.0f,-30.0f, PI_F*1.5f, 0.0f, 0xffdfe1e2 },
+
+    /* Blue family van used in story intro. */
+    { -42.0f,  8.0f, PI_F*0.5f, 0.0f, 0xff2d67b7 }
 };
 
 #define CAR_COUNT ((int)(sizeof(cars) / sizeof(cars[0])))
+#define STORY_VAN_INDEX 4
 
 typedef struct
 {
     float x;
     float z;
     float phase;
-    float path;
-    unsigned int color;
+    unsigned int shirt;
 } Pedestrian;
 
 static Pedestrian pedestrians[] =
 {
-    { -8.0f, -8.0f, 0.0f, 0.0f, 0xffe7d6c6 },
-    {  8.0f,  8.0f, 1.0f, 0.0f, 0xff7a9ad6 },
-    { -8.0f, 16.0f, 2.0f, 0.0f, 0xffd9b15c },
-    { 16.0f,-16.0f, 3.0f, 0.0f, 0xff78a963 },
-    { 40.0f,  6.0f, 4.0f, 0.0f, 0xffbe7da1 },
-    {-40.0f, -6.0f, 5.0f, 0.0f, 0xff9d8a63 }
+    { -10.0f,  9.0f, 0.0f, 0xff496f9c },
+    {  10.0f, -8.0f, 1.0f, 0xffa36f43 },
+    { -9.0f, -9.0f, 2.0f, 0xff6e985b },
+    {  11.0f, 11.0f, 3.0f, 0xff9d5d85 },
+    {  34.0f, -4.0f, 4.0f, 0xff8a6e50 },
+    { -34.0f,  5.0f, 5.0f, 0xff4e8f83 }
 };
 
 #define PEDESTRIAN_COUNT ((int)(sizeof(pedestrians) / sizeof(pedestrians[0])))
 
 /* ------------------------------------------------------------------------- */
-/* Forward declarations                                                       */
+/* 3D primitive vertex data                                                   */
 /* ------------------------------------------------------------------------- */
 
-static void start_transition(GameState next_state);
-static void update_transition(void);
-static void render_fade(void);
-
-static int save_exists(void);
-static void save_game(void);
-static void load_game(void);
-
-static void music_start(void);
-static void music_stop(void);
-
-static void draw_texture(const void *texture);
-static void draw_rect_2d(int x, int y, int w, int h, unsigned int color);
-static void draw_text(const char *text, int x, int y, int scale, unsigned int color);
-static int text_width(const char *text, int scale);
-
-static void render_main_menu(void);
-static void render_language(void);
-static void render_save(void);
-
-static void setup_3d_camera(void);
-static void render_3d_world(void);
-static void render_story_intro(void);
-static void render_hud_3d(const char *mode_name);
-
-static void update_story(void);
-static void update_free_world(void);
-static void update_multiplayer(void);
-static void update_settings(void);
-
-static void draw_cube(
-    float x,
-    float y,
-    float z,
-    float sx,
-    float sy,
-    float sz,
-    unsigned int color
-);
-
-static void draw_tree(float x, float z);
-static void draw_car_3d(const CityCar *car);
-static void draw_player_3d(float x, float y, float z, float yaw, unsigned int shirt_color);
-static void draw_pedestrian_3d(const Pedestrian *ped);
-
-/* ============================================================ */
-/* Save                                                          */
-/* ============================================================ */
-
-static int save_exists(void)
+typedef struct
 {
-    SceUID fd;
-    SaveData data;
+    float x;
+    float y;
+    float z;
+} Vertex3D;
 
-    fd = sceIoOpen(
-        SAVE_FILE,
-        PSP_O_RDONLY,
-        0
-    );
-
-    if (fd < 0)
-        return 0;
-
-    memset(&data, 0, sizeof(data));
-
-    if (sceIoRead(fd, &data, sizeof(data)) == sizeof(data))
-    {
-        sceIoClose(fd);
-        return data.magic == SAVE_MAGIC;
-    }
-
-    sceIoClose(fd);
-    return 0;
-}
-
-static void save_game(void)
+static const Vertex3D __attribute__((aligned(16))) cube_vertices[36] =
 {
-    SceUID fd;
+    {-0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f},
+    {-0.5f,-0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f}, {-0.5f, 0.5f,-0.5f},
 
-    sceIoMkdir(
-        SAVE_DIR,
-        0777
-    );
+    { 0.5f,-0.5f, 0.5f}, {-0.5f,-0.5f, 0.5f}, {-0.5f, 0.5f, 0.5f},
+    { 0.5f,-0.5f, 0.5f}, {-0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f, 0.5f},
 
-    save_data.magic = SAVE_MAGIC;
-    save_data.language = selected_language;
+    {-0.5f,-0.5f, 0.5f}, {-0.5f,-0.5f,-0.5f}, {-0.5f, 0.5f,-0.5f},
+    {-0.5f,-0.5f, 0.5f}, {-0.5f, 0.5f,-0.5f}, {-0.5f, 0.5f, 0.5f},
 
-    /* Username is intentionally unused in this version. */
-    memset(
-        save_data.username,
-        0,
-        sizeof(save_data.username)
-    );
+    { 0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f, 0.5f}, { 0.5f, 0.5f, 0.5f},
+    { 0.5f,-0.5f,-0.5f}, { 0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f,-0.5f},
 
-    fd = sceIoOpen(
-        SAVE_FILE,
-        PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC,
-        0777
-    );
+    {-0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f, 0.5f},
+    {-0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f, 0.5f}, {-0.5f, 0.5f, 0.5f},
 
-    if (fd >= 0)
-    {
-        sceIoWrite(
-            fd,
-            &save_data,
-            sizeof(save_data)
-        );
+    {-0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f,-0.5f},
+    {-0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f,-0.5f}, {-0.5f,-0.5f,-0.5f}
+};
 
-        sceIoClose(fd);
-    }
-}
-
-static void load_game(void)
-{
-    SceUID fd;
-
-    fd = sceIoOpen(
-        SAVE_FILE,
-        PSP_O_RDONLY,
-        0
-    );
-
-    if (fd < 0)
-        return;
-
-    if (sceIoRead(fd, &save_data, sizeof(save_data))
-        != sizeof(save_data))
-    {
-        sceIoClose(fd);
-        return;
-    }
-
-    sceIoClose(fd);
-
-    if (save_data.magic != SAVE_MAGIC)
-        return;
-
-    selected_language = save_data.language;
-}
-
-/* ============================================================ */
-/* Small UI font                                                 */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* 2D font                                                                    */
+/* ------------------------------------------------------------------------- */
 
 static const unsigned char glyph_A[7] = {14,17,17,31,17,17,17};
 static const unsigned char glyph_B[7] = {30,17,17,30,17,17,30};
@@ -471,14 +400,11 @@ static const unsigned char *get_glyph(char c)
         case '7': return glyph_7;
         case '8': return glyph_8;
         case '9': return glyph_9;
-        default: return NULL;
+        default:  return NULL;
     }
 }
 
-static int text_width(
-    const char *text,
-    int scale
-)
+static int text_width(const char *text, int scale)
 {
     int width = 0;
 
@@ -488,10 +414,7 @@ static int text_width(
         ++text;
     }
 
-    if (width > 0)
-        width -= scale;
-
-    return width;
+    return width > 0 ? width - scale : 0;
 }
 
 static void draw_text(
@@ -509,11 +432,11 @@ static void draw_text(
         short z;
     } Vertex;
 
-    int pixel_count = 0;
     const char *p;
-    Vertex *v;
+    int pixel_count = 0;
     int n = 0;
     int current_x = x;
+    Vertex *v;
 
     for (p = text; *p; ++p)
     {
@@ -525,13 +448,9 @@ static void draw_text(
             continue;
 
         for (row = 0; row < 7; ++row)
-        {
             for (col = 0; col < 5; ++col)
-            {
                 if (g[row] & (1 << (4 - col)))
                     ++pixel_count;
-            }
-        }
     }
 
     if (pixel_count <= 0)
@@ -581,17 +500,12 @@ static void draw_text(
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_VERTEX_16BIT |
-        GU_TRANSFORM_2D,
+        GU_VERTEX_16BIT | GU_TRANSFORM_2D,
         n,
         NULL,
         v
     );
 }
-
-/* ============================================================ */
-/* 2D primitives                                                 */
-/* ============================================================ */
 
 static void draw_rect_2d(
     int x,
@@ -625,172 +539,104 @@ static void draw_rect_2d(
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_VERTEX_16BIT |
-        GU_TRANSFORM_2D,
+        GU_VERTEX_16BIT | GU_TRANSFORM_2D,
         2,
         NULL,
         v
     );
 }
 
-/* ============================================================ */
-/* Texture rendering                                             */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Save                                                                       */
+/* ------------------------------------------------------------------------- */
 
-static void draw_texture(
-    const void *texture
-)
+static int save_exists(void)
 {
-    typedef struct
-    {
-        unsigned short u;
-        unsigned short v;
-        unsigned int color;
-        short x;
-        short y;
-        short z;
-    } Vertex;
+    SceUID fd;
+    SaveData data;
 
-    Vertex *v =
-        (Vertex *)sceGuGetMemory(
-            2 * sizeof(Vertex)
-        );
-
-    v[0].u = 0;
-    v[0].v = 0;
-    v[0].color = 0xffffffff;
-    v[0].x = 0;
-    v[0].y = 0;
-    v[0].z = 0;
-
-    v[1].u = SCREEN_WIDTH;
-    v[1].v = SCREEN_HEIGHT;
-    v[1].color = 0xffffffff;
-    v[1].x = SCREEN_WIDTH;
-    v[1].y = SCREEN_HEIGHT;
-    v[1].z = 0;
-
-    sceGuTexMode(
-        GU_PSM_5650,
-        0,
-        0,
+    fd = sceIoOpen(
+        SAVE_FILE,
+        PSP_O_RDONLY,
         0
     );
 
-    sceGuTexImage(
-        0,
-        512,
-        512,
-        512,
-        texture
-    );
+    if (fd < 0)
+        return 0;
 
-    sceGuTexFunc(
-        GU_TFX_REPLACE,
-        GU_TCC_RGB
-    );
+    memset(&data, 0, sizeof(data));
 
-    sceGuTexFilter(
-        GU_NEAREST,
-        GU_NEAREST
-    );
-
-    sceGuEnable(
-        GU_TEXTURE_2D
-    );
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_TEXTURE_16BIT |
-        GU_COLOR_8888 |
-        GU_VERTEX_16BIT |
-        GU_TRANSFORM_2D,
-        2,
-        NULL,
-        v
-    );
-
-    sceGuDisable(
-        GU_TEXTURE_2D
-    );
-}
-
-/* ============================================================ */
-/* Fade                                                          */
-/* ============================================================ */
-
-static void start_transition(
-    GameState next_state
-)
-{
-    transition_active = 1;
-    transition_phase = 0;
-    transition_alpha = 0;
-    transition_target = next_state;
-}
-
-static void update_transition(void)
-{
-    if (!transition_active)
-        return;
-
-    if (transition_phase == 0)
+    if (sceIoRead(fd, &data, sizeof(data)) == sizeof(data))
     {
-        transition_alpha += 20;
-
-        if (transition_alpha >= 255)
-        {
-            transition_alpha = 255;
-
-            state = transition_target;
-
-            if (state == GAME_STATE_SAVING)
-                saving_timer = 0;
-
-            if (state == GAME_STATE_SAVE_FINISHED)
-                save_finished_timer = 0;
-
-            if (state == GAME_STATE_MAIN_MENU)
-            {
-                music_start();
-            }
-            else
-            {
-                music_stop();
-            }
-
-            transition_phase = 1;
-        }
+        sceIoClose(fd);
+        return data.magic == SAVE_MAGIC;
     }
-    else
-    {
-        transition_alpha -= 12;
 
-        if (transition_alpha <= 0)
-        {
-            transition_alpha = 0;
-            transition_active = 0;
-        }
+    sceIoClose(fd);
+    return 0;
+}
+
+static void save_game(void)
+{
+    SceUID fd;
+
+    sceIoMkdir(
+        SAVE_DIR,
+        0777
+    );
+
+    memset(
+        save_data.username,
+        0,
+        sizeof(save_data.username)
+    );
+
+    save_data.magic = SAVE_MAGIC;
+    save_data.language = selected_language;
+
+    fd = sceIoOpen(
+        SAVE_FILE,
+        PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC,
+        0777
+    );
+
+    if (fd >= 0)
+    {
+        sceIoWrite(
+            fd,
+            &save_data,
+            sizeof(save_data)
+        );
+
+        sceIoClose(fd);
     }
 }
 
-static void render_fade(void)
+static void load_game(void)
 {
-    if (!transition_active && transition_alpha == 0)
+    SceUID fd;
+
+    fd = sceIoOpen(
+        SAVE_FILE,
+        PSP_O_RDONLY,
+        0
+    );
+
+    if (fd < 0)
         return;
 
-    draw_rect_2d(
-        0,
-        0,
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT,
-        ((unsigned int)transition_alpha << 24)
-    );
+    if (sceIoRead(fd, &save_data, sizeof(save_data))
+        == sizeof(save_data))
+    {
+        selected_language = save_data.language;
+    }
+
+    sceIoClose(fd);
 }
 
-/* ============================================================ */
-/* Music                                                          */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Music                                                                      */
+/* ------------------------------------------------------------------------- */
 
 static int music_thread_func(
     SceSize args,
@@ -896,43 +742,100 @@ static void music_stop(void)
     }
 }
 
-/* ============================================================ */
-/* 3D primitives                                                  */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Fade                                                                       */
+/* ------------------------------------------------------------------------- */
 
-typedef struct
+static void start_transition(
+    GameState next_state
+)
 {
-    float x;
-    float y;
-    float z;
-} Vertex3D;
+    transition_active = 1;
+    transition_phase = 0;
+    transition_alpha = 0;
+    transition_target = next_state;
+}
 
-static const Vertex3D __attribute__((aligned(16))) cube_vertices[36] =
+static void update_transition(void)
 {
-    /* Front */
-    {-0.5f,-0.5f,-0.5f}, {0.5f,-0.5f,-0.5f}, {0.5f,0.5f,-0.5f},
-    {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,-0.5f}, {-0.5f,0.5f,-0.5f},
+    if (!transition_active)
+        return;
 
-    /* Back */
-    {0.5f,-0.5f,0.5f}, {-0.5f,-0.5f,0.5f}, {-0.5f,0.5f,0.5f},
-    {0.5f,-0.5f,0.5f}, {-0.5f,0.5f,0.5f}, {0.5f,0.5f,0.5f},
+    if (transition_phase == 0)
+    {
+        transition_alpha += 18;
 
-    /* Left */
-    {-0.5f,-0.5f,0.5f}, {-0.5f,-0.5f,-0.5f}, {-0.5f,0.5f,-0.5f},
-    {-0.5f,-0.5f,0.5f}, {-0.5f,0.5f,-0.5f}, {-0.5f,0.5f,0.5f},
+        if (transition_alpha >= 255)
+        {
+            transition_alpha = 255;
 
-    /* Right */
-    {0.5f,-0.5f,-0.5f}, {0.5f,-0.5f,0.5f}, {0.5f,0.5f,0.5f},
-    {0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f}, {0.5f,0.5f,-0.5f},
+            state = transition_target;
 
-    /* Top */
-    {-0.5f,0.5f,-0.5f}, {0.5f,0.5f,-0.5f}, {0.5f,0.5f,0.5f},
-    {-0.5f,0.5f,-0.5f}, {0.5f,0.5f,0.5f}, {-0.5f,0.5f,0.5f},
+            if (state == GAME_STATE_SAVING)
+                saving_timer = 0;
 
-    /* Bottom */
-    {-0.5f,-0.5f,0.5f}, {0.5f,-0.5f,0.5f}, {0.5f,-0.5f,-0.5f},
-    {-0.5f,-0.5f,0.5f}, {0.5f,-0.5f,-0.5f}, {-0.5f,-0.5f,-0.5f}
-};
+            if (state == GAME_STATE_SAVE_FINISHED)
+                save_finished_timer = 0;
+
+            if (state == GAME_STATE_STORY_INTRO)
+            {
+                /*
+                 * Story intro deliberately starts silent.
+                 */
+                music_stop();
+
+                intro_frame = 0;
+                intro_phase = 0;
+
+                intro_van_x = -42.0f;
+                intro_van_z = 8.0f;
+
+                cousin_door_open = 0;
+            }
+            else if (state == GAME_STATE_MAIN_MENU ||
+                     state == GAME_STATE_STORY ||
+                     state == GAME_STATE_FREE_WORLD ||
+                     state == GAME_STATE_MULTIPLAYER)
+            {
+                music_start();
+            }
+            else
+            {
+                music_stop();
+            }
+
+            transition_phase = 1;
+        }
+    }
+    else
+    {
+        transition_alpha -= 10;
+
+        if (transition_alpha <= 0)
+        {
+            transition_alpha = 0;
+            transition_active = 0;
+        }
+    }
+}
+
+static void render_fade(void)
+{
+    if (!transition_active && transition_alpha == 0)
+        return;
+
+    draw_rect_2d(
+        0,
+        0,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+        ((unsigned int)transition_alpha << 24)
+    );
+}
+
+/* ------------------------------------------------------------------------- */
+/* 3D helpers                                                                 */
+/* ------------------------------------------------------------------------- */
 
 static void draw_cube(
     float x,
@@ -958,17 +861,67 @@ static void draw_cube(
     sceGuColor(color);
 
     sceGumPushMatrix();
-
     sceGumTranslate(&pos);
     sceGumScale(&scale);
 
     sceGumDrawArray(
         GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
         36,
         NULL,
         cube_vertices
+    );
+
+    sceGumPopMatrix();
+}
+
+static void draw_pyramid_roof(
+    float x,
+    float y,
+    float z,
+    float sx,
+    float sz,
+    unsigned int color
+)
+{
+    typedef struct
+    {
+        float x;
+        float y;
+        float z;
+    } V;
+
+    static const V __attribute__((aligned(16))) roof[12] =
+    {
+        {-0.5f,0.0f,-0.5f}, {0.5f,0.0f,-0.5f}, {0.0f,0.7f,0.0f},
+        { 0.5f,0.0f,-0.5f}, {0.5f,0.0f, 0.5f}, {0.0f,0.7f,0.0f},
+        { 0.5f,0.0f, 0.5f}, {-0.5f,0.0f, 0.5f}, {0.0f,0.7f,0.0f},
+        {-0.5f,0.0f, 0.5f}, {-0.5f,0.0f,-0.5f}, {0.0f,0.7f,0.0f}
+    };
+
+    ScePspFVector3 pos;
+    ScePspFVector3 scale;
+
+    pos.x = x;
+    pos.y = y;
+    pos.z = z;
+
+    scale.x = sx;
+    scale.y = 2.2f;
+    scale.z = sz;
+
+    sceGuColor(color);
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumScale(&scale);
+
+    sceGumDrawArray(
+        GU_TRIANGLES,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        12,
+        NULL,
+        roof
     );
 
     sceGumPopMatrix();
@@ -976,260 +929,130 @@ static void draw_cube(
 
 static void draw_tree(
     float x,
-    float z
+    float z,
+    float scale_factor
 )
 {
     draw_cube(
         x,
-        2.0f,
+        1.6f * scale_factor,
         z,
-        0.65f,
-        4.0f,
-        0.65f,
-        0xff6b4c30
+        0.55f * scale_factor,
+        3.2f * scale_factor,
+        0.55f * scale_factor,
+        0xff75533a
     );
 
     draw_cube(
         x,
-        5.0f,
+        4.1f * scale_factor,
         z,
-        3.2f,
-        3.2f,
-        3.2f,
-        0xff3e914a
+        2.5f * scale_factor,
+        2.8f * scale_factor,
+        2.5f * scale_factor,
+        0xff327c43
     );
 
     draw_cube(
         x,
-        6.4f,
+        5.2f * scale_factor,
         z,
-        2.2f,
-        2.2f,
-        2.2f,
-        0xff4da555
+        1.8f * scale_factor,
+        1.8f * scale_factor,
+        1.8f * scale_factor,
+        0xff4b9b53
     );
 }
 
-static void draw_car_3d(
-    const CityCar *car
+static void draw_building(
+    const Building *b
 )
 {
-    ScePspFVector3 pos;
-    ScePspFVector3 scale;
-    ScePspFVector3 wheel_pos;
-    ScePspFVector3 wheel_scale;
+    draw_cube(
+        b->x,
+        b->h * 0.5f,
+        b->z,
+        b->w,
+        b->h,
+        b->d,
+        b->wall
+    );
 
-    float wheel_x;
-    float wheel_z;
+    draw_pyramid_roof(
+        b->x,
+        b->h,
+        b->z,
+        b->w * 1.05f,
+        b->d * 1.05f,
+        b->roof
+    );
 
     /*
-     * Body.
+     * Simple window bands give the facades readable detail
+     * without relying on additional texture assets.
      */
-    pos.x = car->x;
-    pos.y = 1.0f;
-    pos.z = car->z;
-
-    sceGuColor(car->color);
-
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(car->yaw);
-
-    scale.x = 3.4f;
-    scale.y = 0.9f;
-    scale.z = 1.7f;
-
-    sceGumScale(&scale);
-
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
+    draw_cube(
+        b->x - b->w * 0.20f,
+        b->h * 0.58f,
+        b->z - b->d * 0.51f,
+        b->w * 0.16f,
+        b->h * 0.16f,
+        0.08f,
+        0xff31556a
     );
 
-    sceGumPopMatrix();
-
-    /*
-     * Roof.
-     */
-    pos.y = 1.65f;
-
-    sceGuColor(0xffe5e7e8);
-
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(car->yaw);
-
-    scale.x = 1.9f;
-    scale.y = 0.65f;
-    scale.z = 1.35f;
-
-    sceGumScale(&scale);
-
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
+    draw_cube(
+        b->x + b->w * 0.20f,
+        b->h * 0.58f,
+        b->z - b->d * 0.51f,
+        b->w * 0.16f,
+        b->h * 0.16f,
+        0.08f,
+        0xff31556a
     );
-
-    sceGumPopMatrix();
-
-    /*
-     * Simple windows.
-     */
-    pos.y = 1.72f;
-
-    sceGuColor(0xff496b7e);
-
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(car->yaw);
-
-    scale.x = 1.65f;
-    scale.y = 0.35f;
-    scale.z = 1.38f;
-
-    sceGumScale(&scale);
-
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-
-    sceGumPopMatrix();
-
-    /*
-     * Wheels as compact boxes; good enough for a PSP-scale model.
-     */
-    wheel_x = car->x + cosf(car->yaw) * 1.25f;
-    wheel_z = car->z + sinf(car->yaw) * 1.25f;
-
-    wheel_pos.y = 0.55f;
-    wheel_scale.x = 0.5f;
-    wheel_scale.y = 0.55f;
-    wheel_scale.z = 0.35f;
-
-    sceGuColor(0xff202326);
-
-    wheel_pos.x = wheel_x;
-    wheel_pos.z = wheel_z + 0.72f;
-
-    sceGumPushMatrix();
-    sceGumTranslate(&wheel_pos);
-    sceGumRotateY(car->yaw);
-    sceGumScale(&wheel_scale);
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-    sceGumPopMatrix();
-
-    wheel_pos.x = wheel_x;
-    wheel_pos.z = wheel_z - 0.72f;
-
-    sceGumPushMatrix();
-    sceGumTranslate(&wheel_pos);
-    sceGumRotateY(car->yaw);
-    sceGumScale(&wheel_scale);
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-    sceGumPopMatrix();
-
-    wheel_x = car->x - cosf(car->yaw) * 1.25f;
-    wheel_z = car->z - sinf(car->yaw) * 1.25f;
-
-    wheel_pos.x = wheel_x;
-    wheel_pos.z = wheel_z + 0.72f;
-
-    sceGumPushMatrix();
-    sceGumTranslate(&wheel_pos);
-    sceGumRotateY(car->yaw);
-    sceGumScale(&wheel_scale);
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-    sceGumPopMatrix();
-
-    wheel_pos.x = wheel_x;
-    wheel_pos.z = wheel_z - 0.72f;
-
-    sceGumPushMatrix();
-    sceGumTranslate(&wheel_pos);
-    sceGumRotateY(car->yaw);
-    sceGumScale(&wheel_scale);
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-    sceGumPopMatrix();
 }
 
-static void draw_player_3d(
+static void draw_human(
     float x,
     float y,
     float z,
     float yaw,
-    unsigned int shirt_color
+    unsigned int shirt
 )
 {
     ScePspFVector3 pos;
     ScePspFVector3 scale;
 
-    if (in_vehicle && current_vehicle >= 0)
-        return;
+    /* Legs */
+    draw_cube(
+        x,
+        y + 0.55f,
+        z,
+        0.55f,
+        1.1f,
+        0.45f,
+        0xff293342
+    );
 
-    /*
-     * Legs.
-     */
+    /* Torso */
     pos.x = x;
-    pos.y = y + 0.65f;
+    pos.y = y + 1.35f;
     pos.z = z;
 
-    sceGuColor(0xff2b3441);
+    scale.x = 0.85f;
+    scale.y = 1.0f;
+    scale.z = 0.55f;
+
+    sceGuColor(shirt);
 
     sceGumPushMatrix();
     sceGumTranslate(&pos);
     sceGumRotateY(yaw);
-
-    scale.x = 0.62f;
-    scale.y = 1.2f;
-    scale.z = 0.40f;
-
     sceGumScale(&scale);
 
     sceGumDrawArray(
         GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
         36,
         NULL,
         cube_vertices
@@ -1237,162 +1060,450 @@ static void draw_player_3d(
 
     sceGumPopMatrix();
 
-    /*
-     * Torso.
-     */
-    pos.y = y + 1.55f;
-
-    sceGuColor(shirt_color);
-
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(yaw);
-
-    scale.x = 0.95f;
-    scale.y = 1.15f;
-    scale.z = 0.65f;
-
-    sceGumScale(&scale);
-
-    sceGumDrawArray(
-        GU_TRIANGLES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_3D,
-        36,
-        NULL,
-        cube_vertices
-    );
-
-    sceGumPopMatrix();
-
-    /*
-     * Head.
-     */
+    /* Head */
     draw_cube(
         x,
-        y + 2.55f,
+        y + 2.35f,
         z,
-        0.62f,
-        0.68f,
-        0.62f,
-        0xffd6a37c
+        0.60f,
+        0.64f,
+        0.60f,
+        0xffd3a17d
     );
 
-    /*
-     * Hair.
-     */
+    /* Hair */
     draw_cube(
         x,
-        y + 2.90f,
+        y + 2.66f,
         z,
-        0.68f,
-        0.25f,
-        0.68f,
-        0xff3c2d25
+        0.66f,
+        0.22f,
+        0.66f,
+        0xff392e29
     );
 }
 
-static void draw_pedestrian_3d(
-    const Pedestrian *ped
+static void draw_car_model(
+    float x,
+    float z,
+    float yaw,
+    unsigned int color,
+    int van_style
 )
 {
+    ScePspFVector3 pos;
+    ScePspFVector3 scale;
+
+    /* Main body */
+    pos.x = x;
+    pos.y = van_style ? 1.05f : 0.85f;
+    pos.z = z;
+
+    scale.x = van_style ? 4.2f : 3.4f;
+    scale.y = van_style ? 1.05f : 0.75f;
+    scale.z = van_style ? 1.70f : 1.55f;
+
+    sceGuColor(color);
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumRotateY(yaw);
+    sceGumScale(&scale);
+
+    sceGumDrawArray(
+        GU_TRIANGLES,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        36,
+        NULL,
+        cube_vertices
+    );
+
+    sceGumPopMatrix();
+
+    /* Cabin */
+    pos.y = van_style ? 2.0f : 1.5f;
+
+    scale.x = van_style ? 2.6f : 1.9f;
+    scale.y = van_style ? 1.0f : 0.65f;
+    scale.z = van_style ? 1.48f : 1.30f;
+
+    sceGuColor(0xffe1e5e7);
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumRotateY(yaw);
+    sceGumScale(&scale);
+
+    sceGumDrawArray(
+        GU_TRIANGLES,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        36,
+        NULL,
+        cube_vertices
+    );
+
+    sceGumPopMatrix();
+
+    /* Window band */
+    pos.y = van_style ? 2.02f : 1.54f;
+
+    scale.x = van_style ? 2.35f : 1.68f;
+    scale.y = van_style ? 0.48f : 0.34f;
+    scale.z = van_style ? 1.36f : 1.18f;
+
+    sceGuColor(0xff3e6175);
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumRotateY(yaw);
+    sceGumScale(&scale);
+
+    sceGumDrawArray(
+        GU_TRIANGLES,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        36,
+        NULL,
+        cube_vertices
+    );
+
+    sceGumPopMatrix();
+
+    /* Wheels */
+    {
+        int side;
+        for (side = -1; side <= 1; side += 2)
+        {
+            float offset_z =
+                van_style ? 0.74f : 0.66f;
+
+            float offset_x =
+                van_style ? 1.45f : 1.15f;
+
+            pos.y = 0.48f;
+
+            /* Front pair */
+            pos.x =
+                x +
+                cosf(yaw) *
+                offset_x -
+                sinf(yaw) *
+                (float)(side) *
+                offset_z;
+
+            pos.z =
+                z +
+                sinf(yaw) *
+                offset_x +
+                cosf(yaw) *
+                (float)(side) *
+                offset_z;
+
+            scale.x = 0.45f;
+            scale.y = 0.50f;
+            scale.z = 0.30f;
+
+            sceGuColor(0xff1c2024);
+
+            sceGumPushMatrix();
+            sceGumTranslate(&pos);
+            sceGumRotateY(yaw);
+            sceGumScale(&scale);
+
+            sceGumDrawArray(
+                GU_TRIANGLES,
+                GU_VERTEX_32BITF |
+                GU_TRANSFORM_3D,
+                36,
+                NULL,
+                cube_vertices
+            );
+
+            sceGumPopMatrix();
+
+            /* Rear pair */
+            pos.x =
+                x -
+                cosf(yaw) *
+                offset_x -
+                sinf(yaw) *
+                (float)(side) *
+                offset_z;
+
+            pos.z =
+                z -
+                sinf(yaw) *
+                offset_x +
+                cosf(yaw) *
+                (float)(side) *
+                offset_z;
+
+            sceGumPushMatrix();
+            sceGumTranslate(&pos);
+            sceGumRotateY(yaw);
+            sceGumScale(&scale);
+
+            sceGumDrawArray(
+                GU_TRIANGLES,
+                GU_VERTEX_32BITF |
+                GU_TRANSFORM_3D,
+                36,
+                NULL,
+                cube_vertices
+            );
+
+            sceGumPopMatrix();
+        }
+    }
+}
+
+static void draw_bridge(void)
+{
+    float z = 82.0f;
+
+    /* Approach road */
     draw_cube(
-        ped->x,
-        0.75f,
-        ped->z,
+        0.0f,
+        -0.06f,
+        z,
+        32.0f,
+        0.12f,
+        7.0f,
+        0xff595b61
+    );
+
+    /* Bridge deck */
+    draw_cube(
+        0.0f,
+        2.5f,
+        z + 7.0f,
+        28.0f,
         0.55f,
-        1.4f,
-        0.55f,
-        ped->color
+        18.0f,
+        0xff8b8c90
+    );
+
+    /* Railings */
+    draw_cube(
+        -13.0f,
+        3.8f,
+        z + 7.0f,
+        0.35f,
+        2.2f,
+        17.0f,
+        0xffd3d7da
     );
 
     draw_cube(
-        ped->x,
-        1.72f,
-        ped->z,
-        0.45f,
-        0.45f,
-        0.45f,
-        0xffd5a17a
+        13.0f,
+        3.8f,
+        z + 7.0f,
+        0.35f,
+        2.2f,
+        17.0f,
+        0xffd3d7da
+    );
+
+    /* Water below */
+    draw_cube(
+        0.0f,
+        -0.30f,
+        z + 7.0f,
+        40.0f,
+        0.15f,
+        32.0f,
+        0xff4d91bc
     );
 }
 
-/* ============================================================ */
-/* 3D camera                                                     */
-/* ============================================================ */
-
-static void setup_3d_camera(void)
+static void render_city_world(void)
 {
-    float forward_x;
-    float forward_z;
+    int i;
 
-    if (in_vehicle && current_vehicle >= 0)
+    /* Ground */
+    draw_cube(
+        0.0f,
+        -0.30f,
+        0.0f,
+        190.0f,
+        0.35f,
+        190.0f,
+        0xff6b9e5b
+    );
+
+    /* Main roads */
+    draw_cube(
+        0.0f,
+        -0.06f,
+        0.0f,
+        190.0f,
+        0.12f,
+        12.0f,
+        0xff4b4c50
+    );
+
+    draw_cube(
+        0.0f,
+        -0.06f,
+        0.0f,
+        12.0f,
+        0.12f,
+        190.0f,
+        0xff4b4c50
+    );
+
+    /* Secondary roads */
+    draw_cube(
+        0.0f,
+        -0.055f,
+        -50.0f,
+        190.0f,
+        0.11f,
+        9.0f,
+        0xff56575b
+    );
+
+    draw_cube(
+        0.0f,
+        -0.055f,
+        50.0f,
+        190.0f,
+        0.11f,
+        9.0f,
+        0xff56575b
+    );
+
+    draw_cube(
+        -50.0f,
+        -0.055f,
+        0.0f,
+        9.0f,
+        0.11f,
+        190.0f,
+        0xff56575b
+    );
+
+    draw_cube(
+        50.0f,
+        -0.055f,
+        0.0f,
+        9.0f,
+        0.11f,
+        190.0f,
+        0xff56575b
+    );
+
+    /* Waterfront */
+    draw_cube(
+        0.0f,
+        -0.20f,
+        -94.0f,
+        190.0f,
+        0.12f,
+        18.0f,
+        0xff4c91bd
+    );
+
+    draw_cube(
+        0.0f,
+        -0.10f,
+        -84.0f,
+        190.0f,
+        0.10f,
+        4.0f,
+        0xffe8d7a4
+    );
+
+    /* Buildings */
+    for (i = 0; i < BUILDING_COUNT; ++i)
+        draw_building(&buildings[i]);
+
+    /* Trees */
+    draw_tree(-62.0f, -60.0f, 1.15f);
+    draw_tree(-28.0f, -59.0f, 0.90f);
+    draw_tree( 28.0f, -60.0f, 1.10f);
+    draw_tree( 63.0f, -59.0f, 0.85f);
+
+    draw_tree(-62.0f, 60.0f, 0.95f);
+    draw_tree(-28.0f, 61.0f, 1.15f);
+    draw_tree( 28.0f, 60.0f, 0.90f);
+    draw_tree( 64.0f, 60.0f, 1.10f);
+
+    /* Bridge */
+    draw_bridge();
+
+    /* Cars */
+    for (i = 0; i < CAR_COUNT; ++i)
     {
-        forward_x = sinf(cars[current_vehicle].yaw);
-        forward_z = -cosf(cars[current_vehicle].yaw);
+        if (i == STORY_VAN_INDEX && state == GAME_STATE_STORY_INTRO)
+            continue;
 
-        camera_eye.x =
-            cars[current_vehicle].x -
-            forward_x * 8.0f;
-
-        camera_eye.y = 5.2f;
-
-        camera_eye.z =
-            cars[current_vehicle].z -
-            forward_z * 8.0f;
-
-        camera_center.x =
-            cars[current_vehicle].x +
-            forward_x * 2.0f;
-
-        camera_center.y = 1.5f;
-
-        camera_center.z =
-            cars[current_vehicle].z +
-            forward_z * 2.0f;
+        draw_car_model(
+            cars[i].x,
+            cars[i].z,
+            cars[i].yaw,
+            cars[i].body,
+            i == STORY_VAN_INDEX
+        );
     }
-    else
+
+    /* Pedestrians */
+    for (i = 0; i < PEDESTRIAN_COUNT; ++i)
     {
-        forward_x = sinf(player_yaw);
-        forward_z = -cosf(player_yaw);
+        Pedestrian *p = &pedestrians[i];
 
-        camera_eye.x =
-            player_x -
-            forward_x * 8.0f;
-
-        camera_eye.y = 5.0f;
-
-        camera_eye.z =
-            player_z -
-            forward_z * 8.0f;
-
-        camera_center.x =
-            player_x +
-            forward_x * 2.0f;
-
-        camera_center.y = 1.45f;
-
-        camera_center.z =
-            player_z +
-            forward_z * 2.0f;
+        draw_human(
+            p->x,
+            0.0f,
+            p->z,
+            0.0f,
+            p->shirt
+        );
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Camera                                                                    */
+/* ------------------------------------------------------------------------- */
+
+static void set_3d_camera(
+    float eye_x,
+    float eye_y,
+    float eye_z,
+    float center_x,
+    float center_y,
+    float center_z
+)
+{
+    camera_eye.x = eye_x;
+    camera_eye.y = eye_y;
+    camera_eye.z = eye_z;
+
+    camera_center.x = center_x;
+    camera_center.y = center_y;
+    camera_center.z = center_z;
 
     camera_up.x = 0.0f;
     camera_up.y = 1.0f;
     camera_up.z = 0.0f;
 
-    sceGumMatrixMode(GU_PROJECTION);
+    sceGumMatrixMode(
+        GU_PROJECTION
+    );
+
     sceGumLoadIdentity();
 
     sceGumPerspective(
-        62.0f,
+        65.0f,
         (float)SCREEN_WIDTH /
         (float)SCREEN_HEIGHT,
         0.25f,
-        500.0f
+        350.0f
     );
 
-    sceGumMatrixMode(GU_VIEW);
+    sceGumMatrixMode(
+        GU_VIEW
+    );
+
     sceGumLoadIdentity();
 
     sceGumLookAt(
@@ -1401,451 +1512,202 @@ static void setup_3d_camera(void)
         &camera_up
     );
 
-    sceGumMatrixMode(GU_MODEL);
+    sceGumMatrixMode(
+        GU_MODEL
+    );
+
     sceGumLoadIdentity();
 }
 
-/* ============================================================ */
-/* 3D world                                                       */
-/* ============================================================ */
-
-static void render_3d_world(void)
+static void set_third_person_camera(void)
 {
-    int i;
+    float fx;
+    float fz;
 
-    setup_3d_camera();
-
-    /* Sky backdrop at ground/world level. */
-    draw_cube(
-        0.0f,
-        -1.5f,
-        0.0f,
-        220.0f,
-        0.2f,
-        220.0f,
-        0xffa8d7f0
-    );
-
-    /* Grass / city ground. */
-    draw_cube(
-        0.0f,
-        -0.30f,
-        0.0f,
-        190.0f,
-        0.35f,
-        190.0f,
-        0xff5f9d58
-    );
-
-    /* Main roads. */
-    draw_cube(
-        0.0f,
-        -0.08f,
-        0.0f,
-        190.0f,
-        0.12f,
-        13.0f,
-        0xff4c4d52
-    );
-
-    draw_cube(
-        0.0f,
-        -0.07f,
-        0.0f,
-        13.0f,
-        0.12f,
-        190.0f,
-        0xff4c4d52
-    );
-
-    /* Side roads. */
-    draw_cube(
-        0.0f,
-        -0.075f,
-        -52.0f,
-        190.0f,
-        0.12f,
-        10.0f,
-        0xff595a60
-    );
-
-    draw_cube(
-        0.0f,
-        -0.075f,
-        52.0f,
-        190.0f,
-        0.12f,
-        10.0f,
-        0xff595a60
-    );
-
-    draw_cube(
-        -52.0f,
-        -0.075f,
-        0.0f,
-        10.0f,
-        0.12f,
-        190.0f,
-        0xff595a60
-    );
-
-    draw_cube(
-        52.0f,
-        -0.075f,
-        0.0f,
-        10.0f,
-        0.12f,
-        190.0f,
-        0xff595a60
-    );
-
-    /* Beach / water. */
-    draw_cube(
-        0.0f,
-        -0.24f,
-        -94.0f,
-        190.0f,
-        0.15f,
-        22.0f,
-        0xff4e99c8
-    );
-
-    draw_cube(
-        0.0f,
-        -0.15f,
-        -82.0f,
-        190.0f,
-        0.10f,
-        3.0f,
-        0xffe9d6a1
-    );
-
-    /* Buildings. */
-    for (i = 0; i < BUILDING_COUNT; ++i)
+    if (in_vehicle &&
+        current_vehicle >= 0)
     {
-        const Building *b = &buildings[i];
+        CityCar *c = &cars[current_vehicle];
 
-        draw_cube(
-            b->x,
-            b->h * 0.5f,
-            b->z,
-            b->w,
-            b->h,
-            b->d,
-            b->color
-        );
+        fx = sinf(c->yaw);
+        fz = -cosf(c->yaw);
 
-        /*
-         * Simple darker roof cap gives buildings extra depth.
-         */
-        draw_cube(
-            b->x,
-            b->h + 0.12f,
-            b->z,
-            b->w * 1.03f,
-            0.25f,
-            b->d * 1.03f,
-            0xff8b6e68
-        );
-    }
-
-    /* Story house: the same house seen in the intro remains here. */
-    if (state == GAME_STATE_STORY)
-    {
-        draw_cube(
-            0.0f, 3.6f, -9.0f,
-            16.0f, 7.2f, 11.0f,
-            0xffe0c49f
-        );
-
-        draw_cube(
-            0.0f, 7.4f, -9.0f,
-            17.0f, 0.35f, 12.0f,
-            0xff975851
-        );
-
-        if (story_step >= 1)
-        {
-            draw_cube(
-                0.0f, 1.5f, -3.35f,
-                2.2f, 3.0f, 0.15f,
-                0xffb78a5e
-            );
-        }
-        else
-        {
-            draw_cube(
-                0.0f, 1.5f, -3.55f,
-                2.2f, 3.0f, 0.15f,
-                0xff6b4d39
-            );
-        }
-
-        draw_cube(
-            0.0f, 0.25f, -3.7f,
-            7.0f, 0.45f, 4.0f,
-            0xffc6b196
-        );
-
-        if (story_step == 0)
-        {
-            draw_cube(
-                1.3f, 1.7f, -3.4f,
-                0.25f, 0.65f, 0.20f,
-                0xfff2cf45
-            );
-        }
-    }
-
-    /* Palm trees / city trees. */
-    draw_tree(-60.0f, -60.0f);
-    draw_tree(-24.0f, -58.0f);
-    draw_tree(26.0f, -58.0f);
-    draw_tree(63.0f, -61.0f);
-
-    draw_tree(-62.0f, 60.0f);
-    draw_tree(-26.0f, 61.0f);
-    draw_tree(26.0f, 61.0f);
-    draw_tree(64.0f, 60.0f);
-
-    draw_tree(-62.0f, 7.0f);
-    draw_tree(63.0f, -4.0f);
-    draw_tree(7.0f, -62.0f);
-    draw_tree(4.0f, 63.0f);
-
-    /* Cars. */
-    for (i = 0; i < CAR_COUNT; ++i)
-        draw_car_3d(&cars[i]);
-
-    /* Pedestrians. */
-    for (i = 0; i < PEDESTRIAN_COUNT; ++i)
-        draw_pedestrian_3d(&pedestrians[i]);
-
-    /* Player. */
-    draw_player_3d(
-        player_x,
-        player_y,
-        player_z,
-        player_yaw,
-        0xff4f77ad
-    );
-
-    /* Cousin stands at the house after the bell is rung. */
-    if (state == GAME_STATE_STORY && story_step >= 1)
-    {
-        draw_player_3d(
-            0.0f,
-            0.0f,
-            -2.5f,
-            PI_F,
-            0xffad7b45
-        );
-    }
-
-    /* Local co-op second player. */
-    if (state == GAME_STATE_MULTIPLAYER)
-    {
-        draw_player_3d(
-            player2_x,
-            player2_y,
-            player2_z,
-            player2_yaw,
-            0xff4f9a68
-        );
-    }
-
-    /* Story objective marker: doorbell. */
-    if (state == GAME_STATE_STORY && story_step == 0)
-    {
-        draw_cube(
-            1.3f,
-            1.7f,
-            -3.4f,
-            0.25f,
-            0.65f,
-            0.20f,
-            0xfff2cf45
-        );
-    }
-}
-
-/* ============================================================ */
-/* 3D HUD                                                        */
-/* ============================================================ */
-
-static void render_hud_3d(
-    const char *mode_name
-)
-{
-    int w;
-
-    /* HUD is 2D and must not be depth-tested against the 3D world. */
-    sceGuDisable(GU_DEPTH_TEST);
-
-    /*
-     * Switch to a pixel-like orthographic projection for HUD.
-     */
-    sceGumMatrixMode(GU_PROJECTION);
-    sceGumLoadIdentity();
-
-    sceGumOrtho(
-        0.0f,
-        (float)SCREEN_WIDTH,
-        (float)SCREEN_HEIGHT,
-        0.0f,
-        -1.0f,
-        1.0f
-    );
-
-    sceGumMatrixMode(GU_VIEW);
-    sceGumLoadIdentity();
-
-    sceGumMatrixMode(GU_MODEL);
-    sceGumLoadIdentity();
-
-    draw_rect_2d(
-        12,
-        8,
-        456,
-        34,
-        0xcc16252d
-    );
-
-    draw_text(
-        mode_name,
-        24,
-        17,
-        3,
-        0xffffffff
-    );
-
-    draw_rect_2d(
-        0,
-        244,
-        480,
-        28,
-        0xcc16252d
-    );
-
-    if (in_vehicle)
-    {
-        draw_text(
-            "DRIVE X EXIT",
-            18,
-            253,
-            2,
-            0xffffffff
+        set_3d_camera(
+            c->x - fx * 9.0f,
+            5.2f,
+            c->z - fz * 9.0f,
+            c->x + fx * 3.0f,
+            1.4f,
+            c->z + fz * 3.0f
         );
     }
     else
     {
-        draw_text(
-            "O BACK",
-            18,
-            253,
-            2,
-            0xffffffff
-        );
+        fx = sinf(player_yaw);
+        fz = -cosf(player_yaw);
 
-        draw_text(
-            "X ENTER",
-            372,
-            253,
-            2,
-            0xffffffff
+        set_3d_camera(
+            player_x - fx * 8.0f,
+            4.8f,
+            player_z - fz * 8.0f,
+            player_x + fx * 2.4f,
+            1.4f,
+            player_z + fz * 2.4f
         );
     }
-
-    if (state == GAME_STATE_STORY)
-    {
-        if (story_step == 0)
-            draw_text("RING THE BELL", 24, 51, 2, 0xff101820);
-        else if (story_step == 1)
-            draw_text("THE COUSIN OPENS", 24, 51, 2, 0xff101820);
-        else
-            draw_text("WELCOME HOME", 24, 51, 2, 0xff101820);
-    }
-    else if (state == GAME_STATE_FREE_WORLD)
-    {
-        draw_text(
-            "EXPLORE THE CITY",
-            24,
-            51,
-            2,
-            0xff101820
-        );
-    }
-    else if (state == GAME_STATE_MULTIPLAYER)
-    {
-        draw_text(
-            "P1 ANALOG  P2 D PAD",
-            24,
-            51,
-            2,
-            0xff101820
-        );
-    }
-
-    /*
-     * Tiny speed meter while driving.
-     */
-    if (in_vehicle &&
-        current_vehicle >= 0)
-    {
-        float speed =
-            fabsf(cars[current_vehicle].speed);
-
-        int meter = (int)(speed * 10.0f);
-
-        if (meter > 120)
-            meter = 120;
-
-        draw_rect_2d(
-            330,
-            18,
-            meter,
-            5,
-            0xffdfefff
-        );
-    }
-
-    w = 0;
-    (void)w;
 }
 
-/* ============================================================ */
-/* Gameplay movement                                             */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Story intro camera and animation                                          */
+/* ------------------------------------------------------------------------- */
+
+static void update_story_intro(void)
+{
+    ++intro_frame;
+
+    if (intro_frame < INTRO_PHASE_APPROACH)
+    {
+        float t =
+            (float)intro_frame /
+            (float)INTRO_PHASE_APPROACH;
+
+        intro_van_x =
+            -42.0f +
+            t * 29.0f;
+    }
+    else if (intro_frame <
+             INTRO_PHASE_APPROACH +
+             INTRO_PHASE_PARK)
+    {
+        intro_van_x = -13.0f;
+    }
+    else if (intro_frame <
+             INTRO_PHASE_APPROACH +
+             INTRO_PHASE_PARK +
+             INTRO_PHASE_EXIT)
+    {
+        int local =
+            intro_frame -
+            INTRO_PHASE_APPROACH -
+            INTRO_PHASE_PARK;
+
+        float t =
+            (float)local /
+            (float)INTRO_PHASE_EXIT;
+
+        if (t > 1.0f)
+            t = 1.0f;
+
+        /*
+         * Two brothers emerge from the side doors.
+         */
+        intro_bro1_x =
+            -13.0f +
+            t * 2.4f;
+
+        intro_bro1_z =
+            5.2f +
+            t * 1.3f;
+
+        intro_bro2_x =
+            -13.0f -
+            t * 1.8f;
+
+        intro_bro2_z =
+            10.0f -
+            t * 1.2f;
+    }
+    else if (intro_frame <
+             INTRO_PHASE_APPROACH +
+             INTRO_PHASE_PARK +
+             INTRO_PHASE_EXIT +
+             INTRO_PHASE_WALK)
+    {
+        int local =
+            intro_frame -
+            INTRO_PHASE_APPROACH -
+            INTRO_PHASE_PARK -
+            INTRO_PHASE_EXIT;
+
+        float t =
+            (float)local /
+            (float)INTRO_PHASE_WALK;
+
+        if (t > 1.0f)
+            t = 1.0f;
+
+        intro_bro1_x =
+            -10.6f -
+            t * 2.0f;
+
+        intro_bro1_z =
+            6.5f +
+            t * 2.6f;
+
+        intro_bro2_x =
+            -14.8f +
+            t * 4.6f;
+
+        intro_bro2_z =
+            8.8f +
+            t * 0.4f;
+    }
+    else if (intro_frame < INTRO_TOTAL)
+    {
+        cousin_door_open =
+            intro_frame >
+            INTRO_TOTAL - 70;
+    }
+    else
+    {
+        player_x = -10.6f;
+        player_z = 9.1f;
+        player_yaw = PI_F;
+
+        brother_x = -14.8f;
+        brother_z = 10.8f;
+        brother_yaw = PI_F;
+
+        story_step = 0;
+
+        start_transition(
+            GAME_STATE_STORY
+        );
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Story / free movement                                                     */
+/* ------------------------------------------------------------------------- */
 
 static void clamp_world_position(
     float *x,
     float *z
 )
 {
-    if (*x < -88.0f)
-        *x = -88.0f;
-
-    if (*x > 88.0f)
-        *x = 88.0f;
-
-    if (*z < -86.0f)
-        *z = -86.0f;
-
-    if (*z > 86.0f)
-        *z = 86.0f;
+    if (*x < -88.0f) *x = -88.0f;
+    if (*x >  88.0f) *x =  88.0f;
+    if (*z < -86.0f) *z = -86.0f;
+    if (*z >  88.0f) *z =  88.0f;
 }
 
 static int nearest_vehicle(void)
 {
     int i;
     int best = -1;
-    float best_d2 = 16.0f;
+    float best_d2 = 25.0f;
 
     for (i = 0; i < CAR_COUNT; ++i)
     {
-        float dx = cars[i].x - player_x;
-        float dz = cars[i].z - player_z;
-        float d2 = dx * dx + dz * dz;
+        float dx =
+            cars[i].x - player_x;
+
+        float dz =
+            cars[i].z - player_z;
+
+        float d2 =
+            dx * dx +
+            dz * dz;
 
         if (d2 < best_d2)
         {
@@ -1857,20 +1719,13 @@ static int nearest_vehicle(void)
     return best;
 }
 
-static void update_walk(
+static void move_walker(
     const SceCtrlData *pad
 )
 {
     float lx;
     float ly;
-    float magnitude;
-    float move_forward;
-    float move_side;
-    float forward_x;
-    float forward_z;
-    float right_x;
-    float right_z;
-    float speed = 0.18f;
+    float mag;
 
     lx =
         ((float)pad->Lx - 128.0f) /
@@ -1892,84 +1747,85 @@ static void update_walk(
     if (pad->Buttons & PSP_CTRL_DOWN)
         ly = 1.0f;
 
-    magnitude =
+    mag =
         sqrtf(lx * lx + ly * ly);
 
-    if (magnitude > 1.0f)
-        magnitude = 1.0f;
-
-    if (magnitude < 0.18f)
+    if (mag < 0.18f)
         return;
 
-    /*
-     * Analog vertical is forward/back.
-     */
-    move_forward = -ly;
-    move_side = lx;
+    if (mag > 1.0f)
+        mag = 1.0f;
 
-    forward_x = sinf(player_yaw);
-    forward_z = -cosf(player_yaw);
-
-    right_x = cosf(player_yaw);
-    right_z = sinf(player_yaw);
-
-    player_x +=
-        (forward_x * move_forward +
-         right_x * move_side) *
-        speed;
-
-    player_z +=
-        (forward_z * move_forward +
-         right_z * move_side) *
-        speed;
-
-    clamp_world_position(
-        &player_x,
-        &player_z
-    );
-
-    /*
-     * Turn toward movement direction.
-     */
-    if (magnitude > 0.20f)
     {
-        float target_yaw =
-            atan2f(
-                forward_x * move_forward +
-                right_x * move_side,
-                -(forward_z * move_forward +
-                  right_z * move_side)
-            );
+        float forward_x =
+            sinf(player_yaw);
 
-        float delta =
-            target_yaw - player_yaw;
+        float forward_z =
+            -cosf(player_yaw);
 
-        while (delta > PI_F)
-            delta -= 2.0f * PI_F;
+        float right_x =
+            cosf(player_yaw);
 
-        while (delta < -PI_F)
-            delta += 2.0f * PI_F;
+        float right_z =
+            sinf(player_yaw);
 
-        player_yaw += delta * 0.18f;
+        player_x +=
+            (forward_x * (-ly) +
+             right_x * lx) *
+            0.22f;
+
+        player_z +=
+            (forward_z * (-ly) +
+             right_z * lx) *
+            0.22f;
+
+        clamp_world_position(
+            &player_x,
+            &player_z
+        );
+
+        /*
+         * Face movement direction.
+         */
+        {
+            float target =
+                atan2f(
+                    forward_x * (-ly) +
+                    right_x * lx,
+                    -(forward_z * (-ly) +
+                      right_z * lx)
+                );
+
+            float delta =
+                target - player_yaw;
+
+            while (delta > PI_F)
+                delta -= 2.0f * PI_F;
+
+            while (delta < -PI_F)
+                delta += 2.0f * PI_F;
+
+            player_yaw +=
+                delta * 0.16f;
+        }
     }
 }
 
-static void update_vehicle(
+static void update_car(
     const SceCtrlData *pad
 )
 {
-    CityCar *car;
+    CityCar *c;
 
     float lx;
     float ly;
-    float accel;
     float forward_x;
     float forward_z;
 
     if (current_vehicle < 0)
         return;
 
-    car = &cars[current_vehicle];
+    c = &cars[current_vehicle];
 
     lx =
         ((float)pad->Lx - 128.0f) /
@@ -1991,46 +1847,79 @@ static void update_vehicle(
     if (pad->Buttons & PSP_CTRL_DOWN)
         ly = 1.0f;
 
-    accel = -ly * 0.045f;
+    c->speed +=
+        -ly * 0.055f;
 
-    car->speed += accel;
+    c->speed *= 0.97f;
 
-    car->speed *= 0.965f;
+    if (c->speed > 8.0f)
+        c->speed = 8.0f;
 
-    if (car->speed > 7.0f)
-        car->speed = 7.0f;
+    if (c->speed < -3.0f)
+        c->speed = -3.0f;
 
-    if (car->speed < -3.0f)
-        car->speed = -3.0f;
+    c->yaw +=
+        lx *
+        (fabsf(c->speed) + 0.8f) *
+        0.028f;
 
-    /*
-     * Steering is stronger at speed.
-     */
-    car->yaw += lx *
-                0.030f *
-                (fabsf(car->speed) + 0.8f);
+    forward_x =
+        sinf(c->yaw);
 
-    forward_x = sinf(car->yaw);
-    forward_z = -cosf(car->yaw);
+    forward_z =
+        -cosf(c->yaw);
 
-    car->x +=
+    c->x +=
         forward_x *
-        car->speed *
+        c->speed *
         0.10f;
 
-    car->z +=
+    c->z +=
         forward_z *
-        car->speed *
+        c->speed *
         0.10f;
 
     clamp_world_position(
-        &car->x,
-        &car->z
+        &c->x,
+        &c->z
     );
 
-    player_x = car->x;
-    player_z = car->z;
-    player_yaw = car->yaw;
+    player_x = c->x;
+    player_z = c->z;
+    player_yaw = c->yaw;
+}
+
+static void update_brother_follow(void)
+{
+    float dx =
+        player_x -
+        brother_x;
+
+    float dz =
+        player_z -
+        brother_z;
+
+    float d2 =
+        dx * dx +
+        dz * dz;
+
+    if (d2 > 6.0f)
+    {
+        brother_x +=
+            dx * 0.025f;
+
+        brother_z +=
+            dz * 0.025f;
+    }
+
+    if (fabsf(dx) + fabsf(dz) > 0.1f)
+    {
+        brother_yaw =
+            atan2f(
+                dx,
+                -dz
+            );
+    }
 }
 
 static void update_pedestrians(void)
@@ -2039,490 +1928,32 @@ static void update_pedestrians(void)
 
     for (i = 0; i < PEDESTRIAN_COUNT; ++i)
     {
-        Pedestrian *p = &pedestrians[i];
+        Pedestrian *p =
+            &pedestrians[i];
 
-        p->path +=
-            0.035f +
-            (p->phase * 0.001f);
+        p->phase += 0.02f;
 
-        if (p->path > 1.0f)
-            p->path -= 1.0f;
+        if (p->phase > 1000.0f)
+            p->phase -= 1000.0f;
 
-        /*
-         * Small peaceful walking loops around the central roads.
-         */
         if (i & 1)
         {
             p->x =
-                -8.0f +
-                p->path * 16.0f +
-                p->phase;
-
-            p->z =
-                8.0f *
-                sinf(
-                    p->path *
-                    2.0f *
-                    PI_F
-                );
+                -9.0f +
+                sinf(p->phase) * 7.0f;
         }
         else
         {
             p->z =
-                -8.0f +
-                p->path * 16.0f;
-
-            p->x =
-                8.0f *
-                cosf(
-                    p->path *
-                    2.0f *
-                    PI_F
-                ) +
-                p->phase;
+                9.0f +
+                cosf(p->phase) * 7.0f;
         }
     }
 }
 
-/* ============================================================ */
-/* Story intro                                                    */
-/* ============================================================ */
-
-static void update_story_intro(void)
-{
-    int t = story_intro_timer;
-
-    ++story_intro_timer;
-
-    /* 0-150: camera follows the blue van into the street. */
-    if (t < 150)
-    {
-        intro_van_x = -32.0f + ((float)t * 0.21f);
-        intro_van_z = 4.0f;
-    }
-    else if (t < 205)
-    {
-        /* Braking / parking. */
-        intro_van_x = -0.5f;
-        intro_van_z = 4.0f;
-    }
-    else
-    {
-        intro_van_x = 0.0f;
-        intro_van_z = 4.0f;
-    }
-
-    /* Three boys exit one after another. */
-    if (t >= 205)
-    {
-        intro_boy1_x = -2.4f;
-        intro_boy1_z = 3.0f;
-    }
-
-    if (t >= 225)
-    {
-        intro_boy2_x = -0.8f;
-        intro_boy2_z = 3.0f;
-    }
-
-    if (t >= 245)
-    {
-        intro_boy3_x = 0.8f;
-        intro_boy3_z = 3.0f;
-    }
-
-    /* Boys walk to the front door. */
-    if (t >= 275 && t < 345)
-    {
-        float k = (float)(t - 275) / 70.0f;
-
-        if (k > 1.0f)
-            k = 1.0f;
-
-        intro_boy1_x = -2.4f + 2.4f * k;
-        intro_boy1_z = 3.0f - 7.0f * k;
-
-        intro_boy2_x = -0.8f + 0.4f * k;
-        intro_boy2_z = 3.0f - 7.0f * k;
-
-        intro_boy3_x = 0.8f - 1.2f * k;
-        intro_boy3_z = 3.0f - 7.0f * k;
-    }
-
-    if (t >= 350)
-        intro_door_open = 1;
-
-    /* Let the player take over after the complete intro. */
-    if (t >= 420)
-    {
-        player_x = 0.0f;
-        player_y = 0.0f;
-        player_z = -8.0f;
-        player_yaw = 0.0f;
-        story_step = 0;
-        flower_collected = 0;
-        in_vehicle = 0;
-        current_vehicle = -1;
-        music_stop();
-
-        state = GAME_STATE_STORY;
-    }
-}
-
-static void render_story_intro(void)
-{
-    int i;
-    int t = story_intro_timer;
-    int x;
-
-    ScePspFVector3 eye;
-    ScePspFVector3 center;
-    ScePspFVector3 up;
-
-    /* Simple cinematic camera: follow the van, then move to the house. */
-    if (t < 210)
-    {
-        eye.x = intro_van_x - 10.0f;
-        eye.y = 4.7f;
-        eye.z = intro_van_z + 13.0f;
-
-        center.x = intro_van_x + 2.0f;
-        center.y = 1.2f;
-        center.z = intro_van_z;
-    }
-    else
-    {
-        eye.x = 10.5f;
-        eye.y = 5.0f;
-        eye.z = 13.0f;
-
-        center.x = 0.0f;
-        center.y = 1.5f;
-        center.z = -2.0f;
-    }
-
-    up.x = 0.0f;
-    up.y = 1.0f;
-    up.z = 0.0f;
-
-    sceGumMatrixMode(GU_PROJECTION);
-    sceGumLoadIdentity();
-    sceGumPerspective(
-        62.0f,
-        (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
-        0.25f,
-        300.0f
-    );
-
-    sceGumMatrixMode(GU_VIEW);
-    sceGumLoadIdentity();
-    sceGumLookAt(&eye, &center, &up);
-
-    sceGumMatrixMode(GU_MODEL);
-    sceGumLoadIdentity();
-
-    /* Road and grass around the house. */
-    draw_cube(0.0f, -0.25f, 0.0f, 92.0f, 0.4f, 56.0f, 0xff5f9d58);
-    draw_cube(0.0f, -0.08f, 4.0f, 92.0f, 0.12f, 11.0f, 0xff4c4d52);
-
-    /* House + door. */
-    draw_cube(0.0f, 3.6f, -9.0f, 16.0f, 7.2f, 11.0f, 0xffe0c49f);
-    draw_cube(0.0f, 7.4f, -9.0f, 17.0f, 0.35f, 12.0f, 0xff975851);
-
-    if (intro_door_open)
-        draw_cube(0.0f, 1.5f, -3.35f, 2.2f, 3.0f, 0.15f, 0xffb78a5e);
-    else
-        draw_cube(0.0f, 1.5f, -3.55f, 2.2f, 3.0f, 0.15f, 0xff6b4d39);
-
-    /* Porch. */
-    draw_cube(0.0f, 0.25f, -3.7f, 7.0f, 0.45f, 4.0f, 0xffc6b196);
-
-    /* Blue family van. */
-    {
-        CityCar van;
-        van.x = intro_van_x;
-        van.z = intro_van_z;
-        van.yaw = 0.0f;
-        van.speed = 0.0f;
-        van.color = 0xff2e72c7;
-        draw_car_3d(&van);
-    }
-
-    /* Boys: simple 3D characters in distinct shirts. */
-    if (t >= 205)
-        draw_player_3d(intro_boy1_x, 0.0f, intro_boy1_z, 0.0f, 0xff4f77ad);
-
-    if (t >= 225)
-        draw_player_3d(intro_boy2_x, 0.0f, intro_boy2_z, 0.0f, 0xffd06b4f);
-
-    if (t >= 245)
-        draw_player_3d(intro_boy3_x, 0.0f, intro_boy3_z, 0.0f, 0xff4f9a68);
-
-    /* Cousin at the doorway once the bell is reached. */
-    if (intro_door_open)
-        draw_player_3d(0.0f, 0.0f, -2.6f, PI_F, 0xffad7b45);
-
-    /* A few background trees. */
-    for (i = 0; i < 5; ++i)
-    {
-        x = -34 + i * 17;
-        draw_tree((float)x, 18.0f);
-    }
-
-    /* Cinematic subtitles are rendered in a separate 2D pass. */
-    sceGuDisable(GU_DEPTH_TEST);
-
-    sceGumMatrixMode(GU_PROJECTION);
-    sceGumLoadIdentity();
-    sceGumOrtho(
-        0.0f,
-        (float)SCREEN_WIDTH,
-        (float)SCREEN_HEIGHT,
-        0.0f,
-        -1.0f,
-        1.0f
-    );
-
-    sceGumMatrixMode(GU_VIEW);
-    sceGumLoadIdentity();
-
-    sceGumMatrixMode(GU_MODEL);
-    sceGumLoadIdentity();
-
-    if (t < 155)
-        draw_text("FOLLOW THE VAN", 18, 18, 2, 0xffffffff);
-    else if (t < 210)
-        draw_text("THE VAN ARRIVES", 18, 18, 2, 0xffffffff);
-    else if (t < 270)
-        draw_text("THREE FRIENDS ARRIVE", 18, 18, 2, 0xffffffff);
-    else if (t < 350)
-        draw_text("THEY WALK TO THE DOOR", 18, 18, 2, 0xffffffff);
-    else if (t < 420)
-        draw_text("THE COUSIN OPENS THE DOOR", 18, 18, 2, 0xffffffff);
-}
-
-/* ============================================================ */
-/* Story update                                                  */
-/* ============================================================ */
-
-static float distance2_to(
-    float x1,
-    float z1,
-    float x2,
-    float z2
-)
-{
-    float dx = x1 - x2;
-    float dz = z1 - z2;
-
-    return dx * dx + dz * dz;
-}
-
-static void update_story(void)
-{
-    if (in_vehicle)
-        return;
-
-    if (story_step == 0)
-    {
-        /* The player must press X at the doorbell. */
-        return;
-    }
-    else if (story_step == 1)
-    {
-        if (distance2_to(
-                player_x,
-                player_z,
-                50.0f,
-                -82.0f
-            ) < 64.0f)
-        {
-            flower_collected = 1;
-            story_step = 2;
-        }
-    }
-    else if (story_step == 2)
-    {
-        if (distance2_to(
-                player_x,
-                player_z,
-                -10.0f,
-                10.0f
-            ) < 64.0f)
-        {
-            story_step = 3;
-        }
-    }
-}
-
-/* ============================================================ */
-/* Game-specific update                                          */
-/* ============================================================ */
-
-static void update_free_world(void)
-{
-    /* The free world uses normal walk / car update. */
-}
-
-static void update_multiplayer(void)
-{
-    float x;
-    float y;
-    float p2_speed = 0.13f;
-
-    /*
-     * Player 1 = analog stick.
-     * Player 2 = D-pad.
-     * This is local co-op on the single handheld.
-     */
-    (void)x;
-    (void)y;
-
-    player2_yaw += 0.0f;
-
-    if (old_buttons & PSP_CTRL_LEFT)
-        player2_x -= p2_speed;
-
-    if (old_buttons & PSP_CTRL_RIGHT)
-        player2_x += p2_speed;
-
-    if (old_buttons & PSP_CTRL_UP)
-        player2_z -= p2_speed;
-
-    if (old_buttons & PSP_CTRL_DOWN)
-        player2_z += p2_speed;
-
-    clamp_world_position(
-        &player2_x,
-        &player2_z
-    );
-}
-
-static void update_settings(void)
-{
-    /* Settings are handled directly in psp_game_update(). */
-}
-
-/* ============================================================ */
-/* Render: menu screens                                           */
-/* ============================================================ */
-
-static void render_language(void)
-{
-    int y;
-
-    draw_texture(
-        LanguageSelection_start
-    );
-
-    /*
-     * Underline only: no opaque white selection box.
-     */
-    y =
-        48 +
-        selected_language * 29;
-
-    draw_rect_2d(
-        145,
-        y,
-        150,
-        2,
-        0xff63b5ff
-    );
-}
-
-static void render_save(void)
-{
-    int x;
-
-    x =
-        (SCREEN_WIDTH -
-         text_width(
-             "SAVE FILE",
-             4
-         )) / 2;
-
-    draw_text(
-        "SAVE FILE",
-        x,
-        64,
-        4,
-        0xffffffff
-    );
-
-    x =
-        (SCREEN_WIDTH -
-         text_width(
-             "PRESS X TO SAVE",
-             3
-         )) / 2;
-
-    draw_text(
-        "PRESS X TO SAVE",
-        x,
-        150,
-        3,
-        0xffffffff
-    );
-
-    x =
-        (SCREEN_WIDTH -
-         text_width(
-             "O BACK",
-             2
-         )) / 2;
-
-    draw_text(
-        "O BACK",
-        x,
-        202,
-        2,
-        0xffc8d8e8
-    );
-}
-
-static void render_main_menu(void)
-{
-    int y;
-
-    draw_texture(
-        MainMenu_start
-    );
-
-    switch (selected_menu)
-    {
-        case 0:
-            y = 151;
-            break;
-
-        case 1:
-            y = 180;
-            break;
-
-        case 2:
-            y = 209;
-            break;
-
-        default:
-            y = 238;
-            break;
-    }
-
-    /*
-     * Thin selection line instead of a solid overlay.
-     */
-    draw_rect_2d(
-        22,
-        y,
-        180,
-        2,
-        0xff63b5ff
-    );
-}
-
-/* ============================================================ */
-/* GU initialization                                              */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* GU / init                                                                 */
+/* ------------------------------------------------------------------------- */
 
 static void gu_init(void)
 {
@@ -2552,8 +1983,8 @@ static void gu_init(void)
     );
 
     sceGuOffset(
-        2048 - (SCREEN_WIDTH / 2),
-        2048 - (SCREEN_HEIGHT / 2)
+        2048 - SCREEN_WIDTH / 2,
+        2048 - SCREEN_HEIGHT / 2
     );
 
     sceGuViewport(
@@ -2568,14 +1999,6 @@ static void gu_init(void)
         0
     );
 
-    sceGuDepthFunc(
-        GU_GEQUAL
-    );
-
-    sceGuClearDepth(
-        0
-    );
-
     sceGuScissor(
         0,
         0,
@@ -2587,16 +2010,12 @@ static void gu_init(void)
         GU_SCISSOR_TEST
     );
 
-    sceGuEnable(
-        GU_CLIP_PLANES
-    );
-
     sceGuDisable(
         GU_CULL_FACE
     );
 
-    sceGuShadeModel(
-        GU_SMOOTH
+    sceGuClearDepth(
+        0
     );
 
     sceGuFinish();
@@ -2611,9 +2030,147 @@ static void gu_init(void)
     );
 }
 
-/* ============================================================ */
-/* Init                                                            */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* HUD                                                                       */
+/* ------------------------------------------------------------------------- */
+
+static void begin_2d(void)
+{
+    sceGumMatrixMode(
+        GU_PROJECTION
+    );
+
+    sceGumLoadIdentity();
+
+    sceGumOrtho(
+        0.0f,
+        (float)SCREEN_WIDTH,
+        (float)SCREEN_HEIGHT,
+        0.0f,
+        -1.0f,
+        1.0f
+    );
+
+    sceGumMatrixMode(
+        GU_VIEW
+    );
+
+    sceGumLoadIdentity();
+
+    sceGumMatrixMode(
+        GU_MODEL
+    );
+
+    sceGumLoadIdentity();
+}
+
+static void render_game_hud(
+    const char *title
+)
+{
+    begin_2d();
+
+    draw_rect_2d(
+        12,
+        8,
+        456,
+        34,
+        0xcc121a23
+    );
+
+    draw_text(
+        title,
+        24,
+        17,
+        3,
+        0xffffffff
+    );
+
+    draw_rect_2d(
+        0,
+        244,
+        SCREEN_WIDTH,
+        28,
+        0xcc121a23
+    );
+
+    draw_text(
+        "O BACK",
+        18,
+        253,
+        2,
+        0xffffffff
+    );
+
+    if (in_vehicle)
+    {
+        draw_text(
+            "X EXIT",
+            420,
+            253,
+            2,
+            0xffffffff
+        );
+    }
+    else
+    {
+        draw_text(
+            "X ENTER",
+            380,
+            253,
+            2,
+            0xffffffff
+        );
+    }
+
+    if (state == GAME_STATE_STORY)
+    {
+        if (story_step == 0)
+        {
+            draw_text(
+                "WALK TO THE BRIDGE",
+                24,
+                51,
+                2,
+                0xff172126
+            );
+        }
+        else
+        {
+            draw_text(
+                "STORY COMPLETE",
+                24,
+                51,
+                2,
+                0xff172126
+            );
+        }
+    }
+    else if (state == GAME_STATE_FREE_WORLD)
+    {
+        draw_text(
+            "EXPLORE PEINE",
+            24,
+            51,
+            2,
+            0xff172126
+        );
+    }
+    else if (state == GAME_STATE_MULTIPLAYER)
+    {
+        draw_text(
+            "P1 ANALOG  P2 D PAD",
+            24,
+            51,
+            2,
+            0xff172126
+        );
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Init                                                                      */
+/* ------------------------------------------------------------------------- */
 
 int psp_game_init(void)
 {
@@ -2632,45 +2189,26 @@ int psp_game_init(void)
     settings_selection = 0;
 
     story_step = 0;
-    flower_collected = 0;
 
     player_x = 0.0f;
     player_y = 0.0f;
-    player_z = 0.0f;
-
+    player_z = 2.0f;
     player_yaw = 0.0f;
+
+    brother_x = -2.0f;
+    brother_z = 4.5f;
 
     in_vehicle = 0;
     current_vehicle = -1;
 
-    player2_x = -3.0f;
-    player2_y = 0.0f;
-    player2_z = 2.0f;
-    player2_yaw = 0.0f;
-
     transition_active = 0;
-    transition_phase = 0;
     transition_alpha = 0;
+    transition_phase = 0;
 
     saving_timer = 0;
     save_finished_timer = 0;
-    story_intro_timer = 0;
-    intro_van_x = -32.0f;
-    intro_van_z = 4.0f;
-    intro_door_open = 0;
 
     old_buttons = 0;
-
-    story_intro_timer = 0;
-    intro_van_x = -32.0f;
-    intro_van_z = 4.0f;
-    intro_boy1_x = -4.0f;
-    intro_boy1_z = 4.0f;
-    intro_boy2_x = -4.0f;
-    intro_boy2_z = 4.0f;
-    intro_boy3_x = -4.0f;
-    intro_boy3_z = 4.0f;
-    intro_door_open = 0;
 
     memset(
         &save_data,
@@ -2683,31 +2221,24 @@ int psp_game_init(void)
     return 0;
 }
 
-/* ============================================================ */
-/* Update                                                           */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Update                                                                    */
+/* ------------------------------------------------------------------------- */
 
 void psp_game_update(void)
 {
     SceCtrlData pad;
     unsigned int pressed;
-    int nearest;
 
     if (!game_initialized)
         return;
 
-    /*
-     * Fades lock input.
-     */
     if (transition_active)
     {
         update_transition();
         return;
     }
 
-    /*
-     * Save status screens.
-     */
     if (state == GAME_STATE_SAVING)
     {
         ++saving_timer;
@@ -2726,13 +2257,19 @@ void psp_game_update(void)
     {
         ++save_finished_timer;
 
-        if (save_finished_timer >= 105)
+        if (save_finished_timer >= 110)
         {
             start_transition(
                 GAME_STATE_MAIN_MENU
             );
         }
 
+        return;
+    }
+
+    if (state == GAME_STATE_STORY_INTRO)
+    {
+        update_story_intro();
         return;
     }
 
@@ -2745,26 +2282,15 @@ void psp_game_update(void)
         pad.Buttons &
         ~old_buttons;
 
-    /*
-     * Keep previous physical state available to the local
-     * second player prototype.
-     */
     old_buttons =
         pad.Buttons;
 
     switch (state)
     {
-        /* ---------------------------------------------------- */
-        /* TITLE                                                  */
-        /* ---------------------------------------------------- */
         case GAME_STATE_TITLE:
 
-            if (pressed &
-                PSP_CTRL_START)
+            if (pressed & PSP_CTRL_START)
             {
-                /*
-                 * No music on title.
-                 */
                 music_stop();
 
                 if (save_exists())
@@ -2785,45 +2311,31 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* LANGUAGE                                                */
-        /* ---------------------------------------------------- */
         case GAME_STATE_LANGUAGE:
 
-            if (pressed &
-                PSP_CTRL_UP)
+            if (pressed & PSP_CTRL_UP)
             {
                 if (selected_language > 0)
                     --selected_language;
             }
 
-            if (pressed &
-                PSP_CTRL_DOWN)
+            if (pressed & PSP_CTRL_DOWN)
             {
                 if (selected_language < 8)
                     ++selected_language;
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 start_transition(
                     GAME_STATE_TITLE
                 );
             }
 
-            if (pressed &
-                PSP_CTRL_CROSS)
+            if (pressed & PSP_CTRL_CROSS)
             {
-                /*
-                 * No username screen.
-                 * Go directly to SAVE.
-                 */
                 save_data.language =
                     selected_language;
-
-                save_data.username[0] =
-                    '\0';
 
                 start_transition(
                     GAME_STATE_SAVE
@@ -2832,9 +2344,6 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* SAVE                                                     */
-        /* ---------------------------------------------------- */
         case GAME_STATE_SAVE:
 
             if (pressed &
@@ -2848,8 +2357,7 @@ void psp_game_update(void)
                 );
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 start_transition(
                     GAME_STATE_LANGUAGE
@@ -2858,93 +2366,58 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* MAIN MENU                                                */
-        /* ---------------------------------------------------- */
         case GAME_STATE_MAIN_MENU:
 
-            if (pressed &
-                PSP_CTRL_UP)
+            if (pressed & PSP_CTRL_UP)
             {
                 if (selected_menu > 0)
                     --selected_menu;
             }
 
-            if (pressed &
-                PSP_CTRL_DOWN)
+            if (pressed & PSP_CTRL_DOWN)
             {
                 if (selected_menu < 3)
                     ++selected_menu;
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
-            {
-                /*
-                 * Leave menu without deleting save.
-                 */
-                start_transition(
-                    GAME_STATE_TITLE
-                );
-            }
-
-            if (pressed &
-                PSP_CTRL_CROSS)
+            if (pressed & PSP_CTRL_CROSS)
             {
                 switch (selected_menu)
                 {
                     case 0:
-
+                        player_x = -10.6f;
+                        player_z = 9.1f;
+                        player_yaw = PI_F;
+                        brother_x = -14.8f;
+                        brother_z = 10.8f;
                         story_step = 0;
-                        flower_collected = 0;
-
-                        player_x = 0.0f;
-                        player_z = 8.0f;
-                        player_yaw = 0.0f;
-
                         in_vehicle = 0;
                         current_vehicle = -1;
-
-                        story_intro_timer = 0;
-                        intro_van_x = -32.0f;
-                        intro_van_z = 4.0f;
-                        intro_boy1_x = -4.0f;
-                        intro_boy1_z = 4.0f;
-                        intro_boy2_x = -4.0f;
-                        intro_boy2_z = 4.0f;
-                        intro_boy3_x = -4.0f;
-                        intro_boy3_z = 4.0f;
-                        intro_door_open = 0;
 
                         start_transition(
                             GAME_STATE_STORY_INTRO
                         );
-
                         break;
 
                     case 1:
-
                         player_x = 0.0f;
-                        player_z = 8.0f;
+                        player_z = 2.0f;
                         player_yaw = 0.0f;
-
                         in_vehicle = 0;
                         current_vehicle = -1;
 
                         start_transition(
                             GAME_STATE_FREE_WORLD
                         );
-
                         break;
 
                     case 2:
-
                         player_x = -4.0f;
-                        player_z = 5.0f;
+                        player_z = 4.0f;
                         player_yaw = 0.0f;
 
                         player2_x = 4.0f;
-                        player2_z = 5.0f;
+                        player2_z = 4.0f;
                         player2_yaw = PI_F;
 
                         in_vehicle = 0;
@@ -2953,113 +2426,76 @@ void psp_game_update(void)
                         start_transition(
                             GAME_STATE_MULTIPLAYER
                         );
-
                         break;
 
                     case 3:
-
                         settings_selection = 0;
 
                         start_transition(
                             GAME_STATE_SETTINGS
                         );
-
                         break;
                 }
             }
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* STORY INTRO                                              */
-        /* ---------------------------------------------------- */
-        case GAME_STATE_STORY_INTRO:
-
-            update_story_intro();
-
-            if (pressed & PSP_CTRL_START)
-            {
-                /* Allow the cinematic to be skipped. */
-                story_intro_timer = 420;
-                update_story_intro();
-            }
-
-            break;
-
-        /* ---------------------------------------------------- */
-        /* STORY                                                    */
-        /* ---------------------------------------------------- */
         case GAME_STATE_STORY:
 
             if (in_vehicle)
-            {
-                update_vehicle(&pad);
-            }
+                update_car(&pad);
             else
-            {
-                update_walk(&pad);
-            }
+                move_walker(&pad);
 
-            update_story();
+            update_brother_follow();
             update_pedestrians();
 
             /*
-             * X at the front door rings the bell.
+             * Enter/exit the nearest peaceful city car.
              */
-            if ((pressed & PSP_CTRL_CROSS) &&
-                !in_vehicle &&
-                story_step == 0 &&
-                distance2_to(
-                    player_x,
-                    player_z,
-                    0.0f,
-                    -3.0f
-                ) < 9.0f)
-            {
-                story_step = 1;
-                intro_door_open = 1;
-            }
-
-            /*
-             * X enters the closest parked car or exits the
-             * current car.
-             */
-            if (pressed &
-                PSP_CTRL_CROSS)
+            if (pressed & PSP_CTRL_CROSS)
             {
                 if (in_vehicle)
                 {
                     in_vehicle = 0;
                     current_vehicle = -1;
-                    music_stop();
                 }
                 else
                 {
-                    nearest = nearest_vehicle();
+                    int nearest =
+                        nearest_vehicle();
 
                     if (nearest >= 0)
                     {
                         current_vehicle = nearest;
                         in_vehicle = 1;
-                        cars[nearest].speed = 0.0f;
 
-                        player_x =
-                            cars[nearest].x;
-
-                        player_z =
-                            cars[nearest].z;
-
-                        player_yaw =
-                            cars[nearest].yaw;
-
-                        /* Music is enabled while driving. */
-                        music_start();
+                        cars[nearest].speed =
+                            0.0f;
                     }
                 }
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            /*
+             * Story objective = reach the bridge.
+             */
+            if (!in_vehicle &&
+                story_step == 0)
+            {
+                float dx =
+                    player_x - 0.0f;
+
+                float dz =
+                    player_z - 82.0f;
+
+                if (dx * dx + dz * dz <
+                    11.0f * 11.0f)
+                {
+                    story_step = 1;
+                }
+            }
+
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 in_vehicle = 0;
                 current_vehicle = -1;
@@ -3071,59 +2507,39 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* FREE WORLD                                              */
-        /* ---------------------------------------------------- */
         case GAME_STATE_FREE_WORLD:
 
             if (in_vehicle)
-            {
-                update_vehicle(&pad);
-            }
+                update_car(&pad);
             else
-            {
-                update_walk(&pad);
-            }
+                move_walker(&pad);
 
-            update_free_world();
             update_pedestrians();
 
-            if (pressed &
-                PSP_CTRL_CROSS)
+            if (pressed & PSP_CTRL_CROSS)
             {
                 if (in_vehicle)
                 {
                     in_vehicle = 0;
                     current_vehicle = -1;
-                    music_stop();
                 }
                 else
                 {
-                    nearest = nearest_vehicle();
+                    int nearest =
+                        nearest_vehicle();
 
                     if (nearest >= 0)
                     {
                         current_vehicle = nearest;
                         in_vehicle = 1;
-                        cars[nearest].speed = 0.0f;
 
-                        player_x =
-                            cars[nearest].x;
-
-                        player_z =
-                            cars[nearest].z;
-
-                        player_yaw =
-                            cars[nearest].yaw;
-
-                        /* Music is enabled while driving. */
-                        music_start();
+                        cars[nearest].speed =
+                            0.0f;
                     }
                 }
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 in_vehicle = 0;
                 current_vehicle = -1;
@@ -3135,41 +2551,56 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* LOCAL CO-OP                                             */
-        /* ---------------------------------------------------- */
         case GAME_STATE_MULTIPLAYER:
 
             /*
-             * P1: analog + normal walk.
+             * Player 1 = analog.
              */
-            update_walk(&pad);
+            {
+                float lx =
+                    ((float)pad.Lx - 128.0f) /
+                    127.0f;
+
+                float ly =
+                    ((float)pad.Ly - 128.0f) /
+                    127.0f;
+
+                if (fabsf(lx) > 0.18f ||
+                    fabsf(ly) > 0.18f)
+                {
+                    player_x += lx * 0.17f;
+                    player_z += ly * 0.17f;
+
+                    clamp_world_position(
+                        &player_x,
+                        &player_z
+                    );
+                }
+            }
 
             /*
-             * P2: D-pad movement.
+             * Player 2 = D-pad.
              */
             if (pad.Buttons & PSP_CTRL_LEFT)
-                player2_x -= 0.13f;
+                player2_x -= 0.17f;
 
             if (pad.Buttons & PSP_CTRL_RIGHT)
-                player2_x += 0.13f;
+                player2_x += 0.17f;
 
             if (pad.Buttons & PSP_CTRL_UP)
-                player2_z -= 0.13f;
+                player2_z -= 0.17f;
 
             if (pad.Buttons & PSP_CTRL_DOWN)
-                player2_z += 0.13f;
+                player2_z += 0.17f;
 
             clamp_world_position(
                 &player2_x,
                 &player2_z
             );
 
-            update_multiplayer();
             update_pedestrians();
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 start_transition(
                     GAME_STATE_MAIN_MENU
@@ -3178,43 +2609,28 @@ void psp_game_update(void)
 
             break;
 
-        /* ---------------------------------------------------- */
-        /* SETTINGS                                                */
-        /* ---------------------------------------------------- */
         case GAME_STATE_SETTINGS:
 
-            update_settings();
-
-            if (pressed &
-                PSP_CTRL_UP)
+            if (pressed & PSP_CTRL_UP)
             {
                 if (settings_selection > 0)
                     --settings_selection;
             }
 
-            if (pressed &
-                PSP_CTRL_DOWN)
+            if (pressed & PSP_CTRL_DOWN)
             {
                 if (settings_selection < 1)
                     ++settings_selection;
             }
 
-            if (pressed &
-                PSP_CTRL_CROSS)
+            if (pressed & PSP_CTRL_CROSS)
             {
                 if (settings_selection == 0)
                 {
-                    /*
-                     * Music is toggled off in settings.
-                     * A new entry into Main Menu starts it again.
-                     */
                     music_stop();
                 }
                 else
                 {
-                    /*
-                     * Reset save completely.
-                     */
                     sceIoRemove(
                         SAVE_FILE
                     );
@@ -3227,8 +2643,7 @@ void psp_game_update(void)
                 }
             }
 
-            if (pressed &
-                PSP_CTRL_CIRCLE)
+            if (pressed & PSP_CTRL_CIRCLE)
             {
                 start_transition(
                     GAME_STATE_MAIN_MENU
@@ -3240,46 +2655,203 @@ void psp_game_update(void)
         default:
             break;
     }
-
-    if (state != GAME_STATE_TITLE &&
-        state != GAME_STATE_LANGUAGE &&
-        state != GAME_STATE_SAVE &&
-        state != GAME_STATE_SAVING &&
-        state != GAME_STATE_SAVE_FINISHED)
-    {
-        /*
-         * During playable modes, keep the city characters moving.
-         */
-        if (state == GAME_STATE_MAIN_MENU)
-        {
-            /* nothing */
-        }
-    }
 }
 
-/* ============================================================ */
-/* Render                                                          */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Render                                                                    */
+/* ------------------------------------------------------------------------- */
+
+static void render_story_intro(void)
+{
+    float camera_x;
+    float camera_y;
+    float camera_z;
+    float center_x;
+    float center_y;
+    float center_z;
+
+    /*
+     * Cinematic camera moves closer to the van and the entrance.
+     */
+    if (intro_phase == 0)
+    {
+        camera_x =
+            intro_van_x - 10.0f;
+
+        camera_y = 5.0f;
+        camera_z = intro_van_z + 14.0f;
+
+        center_x = intro_van_x;
+        center_y = 1.6f;
+        center_z = intro_van_z;
+    }
+    else if (intro_phase == 1 ||
+             intro_phase == 2)
+    {
+        camera_x = -23.0f;
+        camera_y = 4.8f;
+        camera_z = 19.0f;
+
+        center_x = -13.0f;
+        center_y = 1.7f;
+        center_z = 8.0f;
+    }
+    else if (intro_phase == 3)
+    {
+        camera_x = -8.0f;
+        camera_y = 4.4f;
+        camera_z = 18.0f;
+
+        center_x = -12.0f;
+        center_y = 1.5f;
+        center_z = 10.0f;
+    }
+    else
+    {
+        camera_x = -8.0f;
+        camera_y = 4.0f;
+        camera_z = 17.0f;
+
+        center_x = -11.0f;
+        center_y = 1.5f;
+        center_z = 12.0f;
+    }
+
+    set_3d_camera(
+        camera_x,
+        camera_y,
+        camera_z,
+        center_x,
+        center_y,
+        center_z
+    );
+
+    /* City backdrop */
+    render_city_world();
+
+    /* Intro van */
+    draw_car_model(
+        intro_van_x,
+        intro_van_z,
+        intro_van_yaw,
+        0xff2d67b7,
+        1
+    );
+
+    /*
+     * Two brothers.
+     */
+    if (intro_frame >=
+        INTRO_PHASE_APPROACH +
+        INTRO_PHASE_PARK)
+    {
+        draw_human(
+            intro_bro1_x,
+            0.0f,
+            intro_bro1_z,
+            PI_F,
+            0xff4d79af
+        );
+
+        draw_human(
+            intro_bro2_x,
+            0.0f,
+            intro_bro2_z,
+            PI_F,
+            0xff7f8f5d
+        );
+    }
+
+    /*
+     * Cousin at the door.
+     */
+    draw_human(
+        -10.5f,
+        0.0f,
+        12.0f,
+        0.0f,
+        0xff9a6a49
+    );
+
+    /*
+     * House entrance / door.
+     */
+    draw_cube(
+        -10.5f,
+        1.1f,
+        13.7f,
+        2.0f,
+        2.2f,
+        0.25f,
+        cousin_door_open
+            ? 0xff8a6d50
+            : 0xff584c44
+    );
+
+    begin_2d();
+
+    draw_text(
+        "STORY",
+        22,
+        18,
+        3,
+        0xffffffff
+    );
+
+    if (intro_phase <= 1)
+    {
+        draw_text(
+            "THE VAN ARRIVES",
+            22,
+            50,
+            2,
+            0xfff4f4f4
+        );
+    }
+    else if (intro_phase == 2)
+    {
+        draw_text(
+            "TWO BROTHERS ARRIVE",
+            22,
+            50,
+            2,
+            0xfff4f4f4
+        );
+    }
+    else if (intro_phase == 3)
+    {
+        draw_text(
+            "THEY WALK TO THE DOOR",
+            22,
+            50,
+            2,
+            0xfff4f4f4
+        );
+    }
+    else
+    {
+        draw_text(
+            "THE COUSIN OPENS",
+            22,
+            50,
+            2,
+            0xfff4f4f4
+        );
+    }
+}
 
 void psp_game_render(void)
 {
     if (!game_initialized)
         return;
 
-    /*
-     * Normal frame.
-     */
     sceGuStart(
         GU_DIRECT,
         list
     );
 
-    sceGuClearColor(
-        0xff000000
-    );
-
     /*
-     * Enable depth testing for the 3D world.
+     * PSP GU depth setup for 3D.
      */
     sceGuEnable(
         GU_DEPTH_TEST
@@ -3291,6 +2863,10 @@ void psp_game_render(void)
 
     sceGuDepthMask(
         GU_FALSE
+    );
+
+    sceGuClearColor(
+        0xff80b7d9
     );
 
     sceGuClear(
@@ -3306,32 +2882,7 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
+            begin_2d();
 
             draw_texture(
                 Title_start
@@ -3345,34 +2896,23 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
+            begin_2d();
+
+            draw_texture(
+                LanguageSelection_start
             );
 
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
+            /*
+             * Underline selection only.
+             */
+            draw_rect_2d(
+                145,
+                48 +
+                selected_language * 29,
+                150,
+                2,
+                0xff63b5ff
             );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
-
-            render_language();
 
             break;
 
@@ -3382,69 +2922,7 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
-
-            render_save();
-
-            break;
-
-        case GAME_STATE_SAVING:
-
-            sceGuDisable(
-                GU_DEPTH_TEST
-            );
-
-            sceGumMatrixMode(
-                GU_PROJECTION
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
+            begin_2d();
 
             {
                 int x =
@@ -3465,15 +2943,42 @@ void psp_game_render(void)
                 x =
                     (SCREEN_WIDTH -
                      text_width(
+                         "PRESS X TO SAVE",
+                         3
+                     )) / 2;
+
+                draw_text(
+                    "PRESS X TO SAVE",
+                    x,
+                    150,
+                    3,
+                    0xffffffff
+                );
+            }
+
+            break;
+
+        case GAME_STATE_SAVING:
+
+            sceGuDisable(
+                GU_DEPTH_TEST
+            );
+
+            begin_2d();
+
+            {
+                int x =
+                    (SCREEN_WIDTH -
+                     text_width(
                          "SAVING",
-                         4
+                         5
                      )) / 2;
 
                 draw_text(
                     "SAVING",
                     x,
-                    135,
-                    4,
+                    110,
+                    5,
                     0xffffffff
                 );
             }
@@ -3486,32 +2991,7 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
+            begin_2d();
 
             {
                 int x =
@@ -3524,7 +3004,7 @@ void psp_game_render(void)
                 draw_text(
                     "FINISH SAVE",
                     x,
-                    76,
+                    70,
                     3,
                     0xffffffff
                 );
@@ -3539,7 +3019,7 @@ void psp_game_render(void)
                 draw_text(
                     "DATA SAVED",
                     x,
-                    130,
+                    128,
                     3,
                     0xffffffff
                 );
@@ -3553,48 +3033,68 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
+            begin_2d();
+
+            draw_texture(
+                MainMenu_start
             );
 
-            sceGumLoadIdentity();
+            /*
+             * Underline selection without hiding text.
+             */
+            {
+                int y;
 
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
+                switch (selected_menu)
+                {
+                    case 0: y = 151; break;
+                    case 1: y = 180; break;
+                    case 2: y = 209; break;
+                    default: y = 238; break;
+                }
 
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
-
-            render_main_menu();
+                draw_rect_2d(
+                    22,
+                    y,
+                    180,
+                    2,
+                    0xff63b5ff
+                );
+            }
 
             break;
 
         case GAME_STATE_STORY_INTRO:
 
             render_story_intro();
-
             break;
 
         case GAME_STATE_STORY:
 
-            render_3d_world();
+            set_third_person_camera();
 
-            render_hud_3d(
+            render_city_world();
+
+            /*
+             * Player and brother.
+             */
+            draw_human(
+                player_x,
+                player_y,
+                player_z,
+                player_yaw,
+                0xff4d79af
+            );
+
+            draw_human(
+                brother_x,
+                brother_y,
+                brother_z,
+                brother_yaw,
+                0xff7f8f5d
+            );
+
+            render_game_hud(
                 "STORY MODE"
             );
 
@@ -3602,20 +3102,57 @@ void psp_game_render(void)
 
         case GAME_STATE_FREE_WORLD:
 
-            render_3d_world();
+            set_third_person_camera();
 
-            render_hud_3d(
-                "FREE WORLD"
+            render_city_world();
+
+            draw_human(
+                player_x,
+                player_y,
+                player_z,
+                player_yaw,
+                0xff4d79af
+            );
+
+            render_game_hud(
+                "FREE OPEN WORLD"
             );
 
             break;
 
         case GAME_STATE_MULTIPLAYER:
 
-            render_3d_world();
+            set_3d_camera(
+                player_x -
+                sinf(player_yaw) * 9.0f,
+                5.0f,
+                player_z +
+                cosf(player_yaw) * 9.0f,
+                player_x,
+                1.4f,
+                player_z
+            );
 
-            render_hud_3d(
-                "LOCAL CO OP"
+            render_city_world();
+
+            draw_human(
+                player_x,
+                0.0f,
+                player_z,
+                player_yaw,
+                0xff4d79af
+            );
+
+            draw_human(
+                player2_x,
+                0.0f,
+                player2_z,
+                player2_yaw,
+                0xff4f9a68
+            );
+
+            render_game_hud(
+                "MULTIPLAYER LOCAL"
             );
 
             break;
@@ -3626,39 +3163,14 @@ void psp_game_render(void)
                 GU_DEPTH_TEST
             );
 
-            sceGumMatrixMode(
-                GU_PROJECTION
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumOrtho(
-                0.0f,
-                (float)SCREEN_WIDTH,
-                (float)SCREEN_HEIGHT,
-                0.0f,
-                -1.0f,
-                1.0f
-            );
-
-            sceGumMatrixMode(
-                GU_VIEW
-            );
-
-            sceGumLoadIdentity();
-
-            sceGumMatrixMode(
-                GU_MODEL
-            );
-
-            sceGumLoadIdentity();
+            begin_2d();
 
             draw_rect_2d(
                 0,
                 0,
                 SCREEN_WIDTH,
                 SCREEN_HEIGHT,
-                0xff687b89
+                0xff677a89
             );
 
             draw_text(
@@ -3676,7 +3188,7 @@ void psp_game_render(void)
                     78,
                     360,
                     40,
-                    0xff334955
+                    0xff344a56
                 );
             }
             else
@@ -3686,7 +3198,7 @@ void psp_game_render(void)
                     140,
                     360,
                     40,
-                    0xff334955
+                    0xff344a56
                 );
             }
 
@@ -3729,45 +3241,15 @@ void psp_game_render(void)
     }
 
     /*
-     * Fade is rendered last so that it covers both 2D and 3D scenes.
+     * Fade overlay always goes last.
      */
     if (transition_active)
     {
-        /*
-         * The fade uses the current 2D projection.
-         * Switch explicitly so the overlay always covers the screen.
-         */
         sceGuDisable(
             GU_DEPTH_TEST
         );
 
-        sceGumMatrixMode(
-            GU_PROJECTION
-        );
-
-        sceGumLoadIdentity();
-
-        sceGumOrtho(
-            0.0f,
-            (float)SCREEN_WIDTH,
-            (float)SCREEN_HEIGHT,
-            0.0f,
-            -1.0f,
-            1.0f
-        );
-
-        sceGumMatrixMode(
-            GU_VIEW
-        );
-
-        sceGumLoadIdentity();
-
-        sceGumMatrixMode(
-            GU_MODEL
-        );
-
-        sceGumLoadIdentity();
-
+        begin_2d();
         render_fade();
     }
 
@@ -3783,9 +3265,9 @@ void psp_game_render(void)
     sceGuSwapBuffers();
 }
 
-/* ============================================================ */
-/* Shutdown                                                        */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Shutdown                                                                  */
+/* ------------------------------------------------------------------------- */
 
 void psp_game_shutdown(void)
 {
@@ -3803,9 +3285,9 @@ void psp_game_shutdown(void)
     game_initialized = 0;
 }
 
-/* ============================================================ */
-/* Compatibility wrappers                                          */
-/* ============================================================ */
+/* ------------------------------------------------------------------------- */
+/* Compatibility wrappers                                                    */
+/* ------------------------------------------------------------------------- */
 
 void game_init(void)
 {
