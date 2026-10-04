@@ -77,6 +77,7 @@ typedef enum
     GAME_STATE_SAVING,
     GAME_STATE_SAVE_FINISHED,
     GAME_STATE_MAIN_MENU,
+    GAME_STATE_STORY_INTRO,
     GAME_STATE_STORY,
     GAME_STATE_FREE_WORLD,
     GAME_STATE_MULTIPLAYER,
@@ -149,6 +150,18 @@ static float player2_yaw = 0.0f;
 
 static int story_step = 0;
 static int flower_collected = 0;
+
+/* Story intro: blue family van arrives, stops, three boys exit, cousin opens. */
+static int story_intro_timer = 0;
+static float intro_van_x = -32.0f;
+static float intro_van_z = 4.0f;
+static float intro_boy1_x = -4.0f;
+static float intro_boy1_z = 4.0f;
+static float intro_boy2_x = -4.0f;
+static float intro_boy2_z = 4.0f;
+static float intro_boy3_x = -4.0f;
+static float intro_boy3_z = 4.0f;
+static int intro_door_open = 0;
 
 /* ------------------------------------------------------------------------- */
 /* 3D camera                                                                 */
@@ -269,6 +282,7 @@ static void render_save(void);
 
 static void setup_3d_camera(void);
 static void render_3d_world(void);
+static void render_story_intro(void);
 static void render_hud_3d(const char *mode_name);
 
 static void update_story(void);
@@ -736,10 +750,7 @@ static void update_transition(void)
             if (state == GAME_STATE_SAVE_FINISHED)
                 save_finished_timer = 0;
 
-            if (state == GAME_STATE_MAIN_MENU ||
-                state == GAME_STATE_STORY ||
-                state == GAME_STATE_FREE_WORLD ||
-                state == GAME_STATE_MULTIPLAYER)
+            if (state == GAME_STATE_MAIN_MENU)
             {
                 music_start();
             }
@@ -1538,6 +1549,54 @@ static void render_3d_world(void)
         );
     }
 
+    /* Story house: the same house seen in the intro remains here. */
+    if (state == GAME_STATE_STORY)
+    {
+        draw_cube(
+            0.0f, 3.6f, -9.0f,
+            16.0f, 7.2f, 11.0f,
+            0xffe0c49f
+        );
+
+        draw_cube(
+            0.0f, 7.4f, -9.0f,
+            17.0f, 0.35f, 12.0f,
+            0xff975851
+        );
+
+        if (story_step >= 1)
+        {
+            draw_cube(
+                0.0f, 1.5f, -3.35f,
+                2.2f, 3.0f, 0.15f,
+                0xffb78a5e
+            );
+        }
+        else
+        {
+            draw_cube(
+                0.0f, 1.5f, -3.55f,
+                2.2f, 3.0f, 0.15f,
+                0xff6b4d39
+            );
+        }
+
+        draw_cube(
+            0.0f, 0.25f, -3.7f,
+            7.0f, 0.45f, 4.0f,
+            0xffc6b196
+        );
+
+        if (story_step == 0)
+        {
+            draw_cube(
+                1.3f, 1.7f, -3.4f,
+                0.25f, 0.65f, 0.20f,
+                0xfff2cf45
+            );
+        }
+    }
+
     /* Palm trees / city trees. */
     draw_tree(-60.0f, -60.0f);
     draw_tree(-24.0f, -58.0f);
@@ -1571,6 +1630,18 @@ static void render_3d_world(void)
         0xff4f77ad
     );
 
+    /* Cousin stands at the house after the bell is rung. */
+    if (state == GAME_STATE_STORY && story_step >= 1)
+    {
+        draw_player_3d(
+            0.0f,
+            0.0f,
+            -2.5f,
+            PI_F,
+            0xffad7b45
+        );
+    }
+
     /* Local co-op second player. */
     if (state == GAME_STATE_MULTIPLAYER)
     {
@@ -1583,45 +1654,18 @@ static void render_3d_world(void)
         );
     }
 
-    /* Story targets. */
-    if (state == GAME_STATE_STORY)
+    /* Story objective marker: doorbell. */
+    if (state == GAME_STATE_STORY && story_step == 0)
     {
-        if (story_step == 0)
-        {
-            draw_cube(
-                32.0f,
-                1.5f,
-                -28.0f,
-                1.8f,
-                3.0f,
-                1.8f,
-                0xfff2cf45
-            );
-        }
-        else if (story_step == 1)
-        {
-            draw_cube(
-                50.0f,
-                1.4f,
-                -82.0f,
-                2.0f,
-                2.8f,
-                2.0f,
-                0xfff2cf45
-            );
-        }
-        else if (story_step == 2)
-        {
-            draw_cube(
-                -10.0f,
-                1.5f,
-                10.0f,
-                1.8f,
-                3.0f,
-                1.8f,
-                0xfff2cf45
-            );
-        }
+        draw_cube(
+            1.3f,
+            1.7f,
+            -3.4f,
+            0.25f,
+            0.65f,
+            0.20f,
+            0xfff2cf45
+        );
     }
 }
 
@@ -1634,6 +1678,9 @@ static void render_hud_3d(
 )
 {
     int w;
+
+    /* HUD is 2D and must not be depth-tested against the 3D world. */
+    sceGuDisable(GU_DEPTH_TEST);
 
     /*
      * Switch to a pixel-like orthographic projection for HUD.
@@ -1712,13 +1759,11 @@ static void render_hud_3d(
     if (state == GAME_STATE_STORY)
     {
         if (story_step == 0)
-            draw_text("VISIT CAFE", 24, 51, 2, 0xff101820);
+            draw_text("RING THE BELL", 24, 51, 2, 0xff101820);
         else if (story_step == 1)
-            draw_text("GO TO BEACH", 24, 51, 2, 0xff101820);
-        else if (story_step == 2)
-            draw_text("RETURN HOME", 24, 51, 2, 0xff101820);
+            draw_text("THE COUSIN OPENS", 24, 51, 2, 0xff101820);
         else
-            draw_text("STORY COMPLETE", 24, 51, 2, 0xff101820);
+            draw_text("WELCOME HOME", 24, 51, 2, 0xff101820);
     }
     else if (state == GAME_STATE_FREE_WORLD)
     {
@@ -2040,6 +2085,223 @@ static void update_pedestrians(void)
 }
 
 /* ============================================================ */
+/* Story intro                                                    */
+/* ============================================================ */
+
+static void update_story_intro(void)
+{
+    int t = story_intro_timer;
+
+    ++story_intro_timer;
+
+    /* 0-150: camera follows the blue van into the street. */
+    if (t < 150)
+    {
+        intro_van_x = -32.0f + ((float)t * 0.21f);
+        intro_van_z = 4.0f;
+    }
+    else if (t < 205)
+    {
+        /* Braking / parking. */
+        intro_van_x = -0.5f;
+        intro_van_z = 4.0f;
+    }
+    else
+    {
+        intro_van_x = 0.0f;
+        intro_van_z = 4.0f;
+    }
+
+    /* Three boys exit one after another. */
+    if (t >= 205)
+    {
+        intro_boy1_x = -2.4f;
+        intro_boy1_z = 3.0f;
+    }
+
+    if (t >= 225)
+    {
+        intro_boy2_x = -0.8f;
+        intro_boy2_z = 3.0f;
+    }
+
+    if (t >= 245)
+    {
+        intro_boy3_x = 0.8f;
+        intro_boy3_z = 3.0f;
+    }
+
+    /* Boys walk to the front door. */
+    if (t >= 275 && t < 345)
+    {
+        float k = (float)(t - 275) / 70.0f;
+
+        if (k > 1.0f)
+            k = 1.0f;
+
+        intro_boy1_x = -2.4f + 2.4f * k;
+        intro_boy1_z = 3.0f - 7.0f * k;
+
+        intro_boy2_x = -0.8f + 0.4f * k;
+        intro_boy2_z = 3.0f - 7.0f * k;
+
+        intro_boy3_x = 0.8f - 1.2f * k;
+        intro_boy3_z = 3.0f - 7.0f * k;
+    }
+
+    if (t >= 350)
+        intro_door_open = 1;
+
+    /* Let the player take over after the complete intro. */
+    if (t >= 420)
+    {
+        player_x = 0.0f;
+        player_y = 0.0f;
+        player_z = -8.0f;
+        player_yaw = 0.0f;
+        story_step = 0;
+        flower_collected = 0;
+        in_vehicle = 0;
+        current_vehicle = -1;
+        music_stop();
+
+        state = GAME_STATE_STORY;
+    }
+}
+
+static void render_story_intro(void)
+{
+    int i;
+    int t = story_intro_timer;
+    int x;
+
+    ScePspFVector3 eye;
+    ScePspFVector3 center;
+    ScePspFVector3 up;
+
+    /* Simple cinematic camera: follow the van, then move to the house. */
+    if (t < 210)
+    {
+        eye.x = intro_van_x - 10.0f;
+        eye.y = 4.7f;
+        eye.z = intro_van_z + 13.0f;
+
+        center.x = intro_van_x + 2.0f;
+        center.y = 1.2f;
+        center.z = intro_van_z;
+    }
+    else
+    {
+        eye.x = 10.5f;
+        eye.y = 5.0f;
+        eye.z = 13.0f;
+
+        center.x = 0.0f;
+        center.y = 1.5f;
+        center.z = -2.0f;
+    }
+
+    up.x = 0.0f;
+    up.y = 1.0f;
+    up.z = 0.0f;
+
+    sceGumMatrixMode(GU_PROJECTION);
+    sceGumLoadIdentity();
+    sceGumPerspective(
+        62.0f,
+        (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT,
+        0.25f,
+        300.0f
+    );
+
+    sceGumMatrixMode(GU_VIEW);
+    sceGumLoadIdentity();
+    sceGumLookAt(&eye, &center, &up);
+
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+
+    /* Road and grass around the house. */
+    draw_cube(0.0f, -0.25f, 0.0f, 92.0f, 0.4f, 56.0f, 0xff5f9d58);
+    draw_cube(0.0f, -0.08f, 4.0f, 92.0f, 0.12f, 11.0f, 0xff4c4d52);
+
+    /* House + door. */
+    draw_cube(0.0f, 3.6f, -9.0f, 16.0f, 7.2f, 11.0f, 0xffe0c49f);
+    draw_cube(0.0f, 7.4f, -9.0f, 17.0f, 0.35f, 12.0f, 0xff975851);
+
+    if (intro_door_open)
+        draw_cube(0.0f, 1.5f, -3.35f, 2.2f, 3.0f, 0.15f, 0xffb78a5e);
+    else
+        draw_cube(0.0f, 1.5f, -3.55f, 2.2f, 3.0f, 0.15f, 0xff6b4d39);
+
+    /* Porch. */
+    draw_cube(0.0f, 0.25f, -3.7f, 7.0f, 0.45f, 4.0f, 0xffc6b196);
+
+    /* Blue family van. */
+    {
+        CityCar van;
+        van.x = intro_van_x;
+        van.z = intro_van_z;
+        van.yaw = 0.0f;
+        van.speed = 0.0f;
+        van.color = 0xff2e72c7;
+        draw_car_3d(&van);
+    }
+
+    /* Boys: simple 3D characters in distinct shirts. */
+    if (t >= 205)
+        draw_player_3d(intro_boy1_x, 0.0f, intro_boy1_z, 0.0f, 0xff4f77ad);
+
+    if (t >= 225)
+        draw_player_3d(intro_boy2_x, 0.0f, intro_boy2_z, 0.0f, 0xffd06b4f);
+
+    if (t >= 245)
+        draw_player_3d(intro_boy3_x, 0.0f, intro_boy3_z, 0.0f, 0xff4f9a68);
+
+    /* Cousin at the doorway once the bell is reached. */
+    if (intro_door_open)
+        draw_player_3d(0.0f, 0.0f, -2.6f, PI_F, 0xffad7b45);
+
+    /* A few background trees. */
+    for (i = 0; i < 5; ++i)
+    {
+        x = -34 + i * 17;
+        draw_tree((float)x, 18.0f);
+    }
+
+    /* Cinematic subtitles are rendered in a separate 2D pass. */
+    sceGuDisable(GU_DEPTH_TEST);
+
+    sceGumMatrixMode(GU_PROJECTION);
+    sceGumLoadIdentity();
+    sceGumOrtho(
+        0.0f,
+        (float)SCREEN_WIDTH,
+        (float)SCREEN_HEIGHT,
+        0.0f,
+        -1.0f,
+        1.0f
+    );
+
+    sceGumMatrixMode(GU_VIEW);
+    sceGumLoadIdentity();
+
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+
+    if (t < 155)
+        draw_text("FOLLOW THE VAN", 18, 18, 2, 0xffffffff);
+    else if (t < 210)
+        draw_text("THE VAN ARRIVES", 18, 18, 2, 0xffffffff);
+    else if (t < 270)
+        draw_text("THREE FRIENDS ARRIVE", 18, 18, 2, 0xffffffff);
+    else if (t < 350)
+        draw_text("THEY WALK TO THE DOOR", 18, 18, 2, 0xffffffff);
+    else if (t < 420)
+        draw_text("THE COUSIN OPENS THE DOOR", 18, 18, 2, 0xffffffff);
+}
+
+/* ============================================================ */
 /* Story update                                                  */
 /* ============================================================ */
 
@@ -2063,15 +2325,8 @@ static void update_story(void)
 
     if (story_step == 0)
     {
-        if (distance2_to(
-                player_x,
-                player_z,
-                32.0f,
-                -28.0f
-            ) < 49.0f)
-        {
-            story_step = 1;
-        }
+        /* The player must press X at the doorbell. */
+        return;
     }
     else if (story_step == 1)
     {
@@ -2309,8 +2564,16 @@ static void gu_init(void)
     );
 
     sceGuDepthRange(
-        0xc350,
-        0x2710
+        65535,
+        0
+    );
+
+    sceGuDepthFunc(
+        GU_GEQUAL
+    );
+
+    sceGuClearDepth(
+        0
     );
 
     sceGuScissor(
@@ -2324,17 +2587,16 @@ static void gu_init(void)
         GU_SCISSOR_TEST
     );
 
+    sceGuEnable(
+        GU_CLIP_PLANES
+    );
+
     sceGuDisable(
         GU_CULL_FACE
     );
 
     sceGuShadeModel(
         GU_SMOOTH
-    );
-
-    sceGuDepthBuffer(
-        (void *)0x110000,
-        BUF_WIDTH
     );
 
     sceGuFinish();
@@ -2392,8 +2654,23 @@ int psp_game_init(void)
 
     saving_timer = 0;
     save_finished_timer = 0;
+    story_intro_timer = 0;
+    intro_van_x = -32.0f;
+    intro_van_z = 4.0f;
+    intro_door_open = 0;
 
     old_buttons = 0;
+
+    story_intro_timer = 0;
+    intro_van_x = -32.0f;
+    intro_van_z = 4.0f;
+    intro_boy1_x = -4.0f;
+    intro_boy1_z = 4.0f;
+    intro_boy2_x = -4.0f;
+    intro_boy2_z = 4.0f;
+    intro_boy3_x = -4.0f;
+    intro_boy3_z = 4.0f;
+    intro_door_open = 0;
 
     memset(
         &save_data,
@@ -2628,8 +2905,19 @@ void psp_game_update(void)
                         in_vehicle = 0;
                         current_vehicle = -1;
 
+                        story_intro_timer = 0;
+                        intro_van_x = -32.0f;
+                        intro_van_z = 4.0f;
+                        intro_boy1_x = -4.0f;
+                        intro_boy1_z = 4.0f;
+                        intro_boy2_x = -4.0f;
+                        intro_boy2_z = 4.0f;
+                        intro_boy3_x = -4.0f;
+                        intro_boy3_z = 4.0f;
+                        intro_door_open = 0;
+
                         start_transition(
-                            GAME_STATE_STORY
+                            GAME_STATE_STORY_INTRO
                         );
 
                         break;
@@ -2683,6 +2971,22 @@ void psp_game_update(void)
             break;
 
         /* ---------------------------------------------------- */
+        /* STORY INTRO                                              */
+        /* ---------------------------------------------------- */
+        case GAME_STATE_STORY_INTRO:
+
+            update_story_intro();
+
+            if (pressed & PSP_CTRL_START)
+            {
+                /* Allow the cinematic to be skipped. */
+                story_intro_timer = 420;
+                update_story_intro();
+            }
+
+            break;
+
+        /* ---------------------------------------------------- */
         /* STORY                                                    */
         /* ---------------------------------------------------- */
         case GAME_STATE_STORY:
@@ -2700,6 +3004,23 @@ void psp_game_update(void)
             update_pedestrians();
 
             /*
+             * X at the front door rings the bell.
+             */
+            if ((pressed & PSP_CTRL_CROSS) &&
+                !in_vehicle &&
+                story_step == 0 &&
+                distance2_to(
+                    player_x,
+                    player_z,
+                    0.0f,
+                    -3.0f
+                ) < 9.0f)
+            {
+                story_step = 1;
+                intro_door_open = 1;
+            }
+
+            /*
              * X enters the closest parked car or exits the
              * current car.
              */
@@ -2710,6 +3031,7 @@ void psp_game_update(void)
                 {
                     in_vehicle = 0;
                     current_vehicle = -1;
+                    music_stop();
                 }
                 else
                 {
@@ -2729,6 +3051,9 @@ void psp_game_update(void)
 
                         player_yaw =
                             cars[nearest].yaw;
+
+                        /* Music is enabled while driving. */
+                        music_start();
                     }
                 }
             }
@@ -2770,6 +3095,7 @@ void psp_game_update(void)
                 {
                     in_vehicle = 0;
                     current_vehicle = -1;
+                    music_stop();
                 }
                 else
                 {
@@ -2789,6 +3115,9 @@ void psp_game_update(void)
 
                         player_yaw =
                             cars[nearest].yaw;
+
+                        /* Music is enabled while driving. */
+                        music_start();
                     }
                 }
             }
@@ -2961,7 +3290,7 @@ void psp_game_render(void)
     );
 
     sceGuDepthMask(
-        GU_TRUE
+        GU_FALSE
     );
 
     sceGuClear(
@@ -3252,6 +3581,12 @@ void psp_game_render(void)
             sceGumLoadIdentity();
 
             render_main_menu();
+
+            break;
+
+        case GAME_STATE_STORY_INTRO:
+
+            render_story_intro();
 
             break;
 
