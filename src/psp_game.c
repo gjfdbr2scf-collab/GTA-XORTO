@@ -2,7 +2,6 @@
 #include <pspctrl.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
-#include <pspgum.h>
 #include <psputility.h>
 #include <psputility_osk.h>
 #include <psputility_sysparam.h>
@@ -13,27 +12,24 @@
 
 #include "psp_game.h"
 
-/* Eingebettete Dateien */
+/* Embedded assets created by bin2o in the Makefile. */
 extern const unsigned char Title_start[];
 extern const unsigned char LanguageSelection_start[];
 extern const unsigned char MainMenu_start[];
 extern const unsigned char Music_start[];
 extern const unsigned char Music_end[];
 
-/* Bildschirm */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
 #define BUF_WIDTH     512
 
-/* Save */
-#define SAVE_DIR  "ms0:/PSP/SAVEDATA/GINSENG2"
-#define SAVE_FILE "ms0:/PSP/SAVEDATA/GINSENG2/SAVE.DAT"
+#define SAVE_DIR   "ms0:/PSP/SAVEDATA/GINSENG2"
+#define SAVE_FILE  "ms0:/PSP/SAVEDATA/GINSENG2/SAVE.DAT"
 #define SAVE_MAGIC 0x47325332
 
-/* Musik */
-#define MUSIC_RATE 22050
+#define MUSIC_RATE    22050
 #define MUSIC_SAMPLES 1024
-#define MUSIC_VOLUME 0x6000
+#define MUSIC_VOLUME  0x6000
 
 typedef enum
 {
@@ -51,96 +47,6 @@ typedef struct
     char username[32];
 } SaveData;
 
-static GameState state = GAME_STATE_TITLE;
-
-static int game_initialized = 0;
-static int selected_language = 0;
-static int selected_menu = 0;
-
-static unsigned int old_buttons = 0;
-
-static SaveData save_data;
-
-static unsigned int __attribute__((aligned(64)))
-    list[0x20000 / 4];
-
-/* =========================================================
- * SAVE
- * ========================================================= */
-
-static int save_exists(void)
-{
-    SceUID fd;
-    SaveData data;
-
-    fd = sceIoOpen(
-        SAVE_FILE,
-        PSP_O_RDONLY,
-        0
-    );
-
-    if (fd < 0)
-        return 0;
-
-    memset(&data, 0, sizeof(data));
-
-    if (sceIoRead(fd, &data, sizeof(data)) == sizeof(data))
-    {
-        sceIoClose(fd);
-
-        if (data.magic == SAVE_MAGIC)
-            return 1;
-
-        return 0;
-    }
-
-    sceIoClose(fd);
-
-    return 0;
-}
-
-static void save_game(void)
-{
-    SceUID fd;
-
-    sceIoMkdir(
-        SAVE_DIR,
-        0777
-    );
-
-    save_data.magic = SAVE_MAGIC;
-    save_data.language = selected_language;
-
-    if (save_data.username[0] == '\0')
-    {
-        strcpy(
-            save_data.username,
-            "PLAYER"
-        );
-    }
-
-    fd = sceIoOpen(
-        SAVE_FILE,
-        PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC,
-        0777
-    );
-
-    if (fd >= 0)
-    {
-        sceIoWrite(
-            fd,
-            &save_data,
-            sizeof(save_data)
-        );
-
-        sceIoClose(fd);
-    }
-}
-
-/* =========================================================
- * TEXTURE
- * ========================================================= */
-
 typedef struct
 {
     unsigned short u;
@@ -151,11 +57,89 @@ typedef struct
     short z;
 } TextureVertex;
 
+typedef struct
+{
+    short x;
+    short y;
+    short z;
+} LineVertex;
+
+static GameState state = GAME_STATE_TITLE;
+static SaveData save_data;
+static int game_initialized = 0;
+static int selected_language = 0;
+static int selected_menu = 0;
+static unsigned int old_buttons = 0;
+
+static unsigned int __attribute__((aligned(64))) list[0x20000 / 4];
+
+/* =========================================================
+ * SAVE
+ * ========================================================= */
+
+static int save_exists(void)
+{
+    SceUID fd;
+    SaveData data;
+    int ok = 0;
+
+    fd = sceIoOpen(SAVE_FILE, PSP_O_RDONLY, 0);
+    if (fd < 0)
+        return 0;
+
+    memset(&data, 0, sizeof(data));
+
+    if (sceIoRead(fd, &data, sizeof(data)) == sizeof(data) &&
+        data.magic == SAVE_MAGIC)
+    {
+        ok = 1;
+        save_data = data;
+        selected_language = data.language;
+        if (selected_language < 0 || selected_language > 8)
+            selected_language = 0;
+    }
+
+    sceIoClose(fd);
+    return ok;
+}
+
+static int save_game(void)
+{
+    SceUID fd;
+    int result = 0;
+
+    save_data.magic = SAVE_MAGIC;
+    save_data.language = selected_language;
+
+    if (save_data.username[0] == '\0')
+        strcpy(save_data.username, "PLAYER");
+
+    sceIoMkdir(SAVE_DIR, 0777);
+
+    fd = sceIoOpen(
+        SAVE_FILE,
+        PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC,
+        0777
+    );
+
+    if (fd >= 0)
+    {
+        if (sceIoWrite(fd, &save_data, sizeof(save_data)) == sizeof(save_data))
+            result = 1;
+
+        sceIoClose(fd);
+    }
+
+    return result;
+}
+
+/* =========================================================
+ * TEXTURE / UNDERLINE
+ * ========================================================= */
+
 static void draw_texture(const void *texture)
 {
-    TextureVertex *v;
-
-    v = (TextureVertex *)sceGuGetMemory(
+    TextureVertex *v = (TextureVertex *)sceGuGetMemory(
         2 * sizeof(TextureVertex)
     );
 
@@ -173,34 +157,12 @@ static void draw_texture(const void *texture)
     v[1].y = SCREEN_HEIGHT;
     v[1].z = 0;
 
-    sceGuTexMode(
-        GU_PSM_5650,
-        0,
-        0,
-        0
-    );
-
-    sceGuTexImage(
-        0,
-        512,
-        512,
-        512,
-        texture
-    );
-
-    sceGuTexFunc(
-        GU_TFX_REPLACE,
-        GU_TCC_RGB
-    );
-
-    sceGuTexFilter(
-        GU_NEAREST,
-        GU_NEAREST
-    );
-
-    sceGuEnable(
-        GU_TEXTURE_2D
-    );
+    sceGuDisable(GU_BLEND);
+    sceGuTexMode(GU_PSM_5650, 0, 0, GU_FALSE);
+    sceGuTexImage(0, 512, 512, 512, texture);
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuEnable(GU_TEXTURE_2D);
 
     sceGuDrawArray(
         GU_SPRITES,
@@ -213,95 +175,76 @@ static void draw_texture(const void *texture)
         v
     );
 
-    sceGuDisable(
-        GU_TEXTURE_2D
+    sceGuDisable(GU_TEXTURE_2D);
+}
+
+static void draw_underline(int x, int y, int width)
+{
+    LineVertex *v = (LineVertex *)sceGuGetMemory(
+        2 * sizeof(LineVertex)
+    );
+
+    v[0].x = x;
+    v[0].y = y;
+    v[0].z = 0;
+
+    v[1].x = x + width;
+    v[1].y = y + 3;
+    v[1].z = 0;
+
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuColor(0xffffffff);
+
+    sceGuDrawArray(
+        GU_SPRITES,
+        GU_VERTEX_16BIT |
+        GU_TRANSFORM_2D,
+        2,
+        NULL,
+        v
     );
 }
 
 /* =========================================================
- * EINFACHE SCHRIFT FÜR SAVE-BILDSCHIRM
+ * SMALL BITMAP FONT - used only for SAVE screen
  * ========================================================= */
 
-typedef struct
-{
-    short x;
-    short y;
-    short z;
-} FontVertex;
+static const unsigned char G_S[7] = {0x1f,0x10,0x10,0x1f,0x01,0x01,0x1f};
+static const unsigned char G_A[7] = {0x0e,0x11,0x11,0x1f,0x11,0x11,0x11};
+static const unsigned char G_V[7] = {0x11,0x11,0x11,0x11,0x11,0x0a,0x04};
+static const unsigned char G_E[7] = {0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f};
+static const unsigned char G_P[7] = {0x1e,0x11,0x11,0x1e,0x10,0x10,0x10};
+static const unsigned char G_R[7] = {0x1e,0x11,0x11,0x1e,0x14,0x12,0x11};
+static const unsigned char G_X[7] = {0x11,0x11,0x0a,0x04,0x0a,0x11,0x11};
+static const unsigned char G_T[7] = {0x1f,0x04,0x04,0x04,0x04,0x04,0x04};
+static const unsigned char G_O[7] = {0x0e,0x11,0x11,0x11,0x11,0x11,0x0e};
 
-static const unsigned char glyph_S[7] =
-{
-    0x1F, 0x10, 0x10, 0x1F, 0x01, 0x01, 0x1F
-};
-
-static const unsigned char glyph_A[7] =
-{
-    0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11
-};
-
-static const unsigned char glyph_V[7] =
-{
-    0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04
-};
-
-static const unsigned char glyph_E[7] =
-{
-    0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F
-};
-
-static const unsigned char glyph_P[7] =
-{
-    0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10
-};
-
-static const unsigned char glyph_R[7] =
-{
-    0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11
-};
-
-static const unsigned char glyph_X[7] =
-{
-    0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11
-};
-
-static const unsigned char glyph_T[7] =
-{
-    0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04
-};
-
-static const unsigned char glyph_O[7] =
-{
-    0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E
-};
-
-static const unsigned char *get_glyph(char c)
+static const unsigned char *glyph_for_char(char c)
 {
     switch (c)
     {
-        case 'S': return glyph_S;
-        case 'A': return glyph_A;
-        case 'V': return glyph_V;
-        case 'E': return glyph_E;
-        case 'P': return glyph_P;
-        case 'R': return glyph_R;
-        case 'X': return glyph_X;
-        case 'T': return glyph_T;
-        case 'O': return glyph_O;
+        case 'S': return G_S;
+        case 'A': return G_A;
+        case 'V': return G_V;
+        case 'E': return G_E;
+        case 'P': return G_P;
+        case 'R': return G_R;
+        case 'X': return G_X;
+        case 'T': return G_T;
+        case 'O': return G_O;
         default:  return NULL;
     }
 }
 
-static int text_width(
-    const char *text,
-    int scale
-)
+static int simple_text_width(const char *text, int scale)
 {
     int width = 0;
 
     while (*text)
     {
         width += 6 * scale;
-        text++;
+        ++text;
     }
 
     if (width > 0)
@@ -310,91 +253,66 @@ static int text_width(
     return width;
 }
 
-static void draw_text(
+static void draw_simple_text(
     const char *text,
     int x,
     int y,
     int scale
 )
 {
-    int chars = 0;
-    int i;
+    int count = 0;
+    int i = 0;
     int row;
     int col;
-    int count = 0;
     int current_x = x;
-
-    const char *p = text;
-
-    while (*p)
-    {
-        const unsigned char *glyph =
-            get_glyph(*p);
-
-        if (glyph != NULL)
-        {
-            for (row = 0; row < 7; ++row)
-            {
-                for (col = 0; col < 5; ++col)
-                {
-                    if (glyph[row] &
-                        (1 << (4 - col)))
-                    {
-                        count++;
-                    }
-                }
-            }
-        }
-
-        chars++;
-        p++;
-    }
-
-    if (count <= 0)
-        return;
-
-    FontVertex *vertices =
-        (FontVertex *)sceGuGetMemory(
-            count * 2 * sizeof(FontVertex)
-        );
-
-    i = 0;
-
-    sceGuColor(
-        0xffffffff
-    );
+    const char *p;
+    LineVertex *v;
 
     p = text;
-
     while (*p)
     {
-        const unsigned char *glyph =
-            get_glyph(*p);
+        const unsigned char *g = glyph_for_char(*p);
+        if (g != NULL)
+        {
+            for (row = 0; row < 7; ++row)
+                for (col = 0; col < 5; ++col)
+                    if (g[row] & (1 << (4 - col)))
+                        ++count;
+        }
+        ++p;
+    }
 
-        if (glyph != NULL)
+    if (count == 0)
+        return;
+
+    v = (LineVertex *)sceGuGetMemory(
+        count * 2 * sizeof(LineVertex)
+    );
+
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuColor(0xffffffff);
+
+    p = text;
+    while (*p)
+    {
+        const unsigned char *g = glyph_for_char(*p);
+
+        if (g != NULL)
         {
             for (row = 0; row < 7; ++row)
             {
                 for (col = 0; col < 5; ++col)
                 {
-                    if (glyph[row] &
-                        (1 << (4 - col)))
+                    if (g[row] & (1 << (4 - col)))
                     {
-                        vertices[i].x =
-                            current_x + col * scale;
-                        vertices[i].y =
-                            y + row * scale;
-                        vertices[i].z = 0;
+                        v[i].x = current_x + col * scale;
+                        v[i].y = y + row * scale;
+                        v[i].z = 0;
 
-                        vertices[i + 1].x =
-                            current_x +
-                            (col + 1) * scale;
-
-                        vertices[i + 1].y =
-                            y +
-                            (row + 1) * scale;
-
-                        vertices[i + 1].z = 0;
+                        v[i + 1].x = current_x + (col + 1) * scale;
+                        v[i + 1].y = y + (row + 1) * scale;
+                        v[i + 1].z = 0;
 
                         i += 2;
                     }
@@ -403,7 +321,7 @@ static void draw_text(
         }
 
         current_x += 6 * scale;
-        p++;
+        ++p;
     }
 
     sceGuDrawArray(
@@ -412,34 +330,24 @@ static void draw_text(
         GU_TRANSFORM_2D,
         i,
         NULL,
-        vertices
+        v
     );
 }
 
 /* =========================================================
- * MUSIK
+ * MUSIC
  * ========================================================= */
 
 static volatile int music_running = 0;
 static volatile unsigned int music_position = 0;
-
 static SceUID music_thread = -1;
+static short __attribute__((aligned(64))) music_buffer[MUSIC_SAMPLES];
 
-static short __attribute__((aligned(64)))
-    music_buffer[MUSIC_SAMPLES];
-
-static int music_thread_func(
-    SceSize args,
-    void *argp
-)
+static int music_thread_func(SceSize args, void *argp)
 {
-    const short *samples =
-        (const short *)Music_start;
-
+    const short *samples = (const short *)Music_start;
     unsigned int sample_count =
-        (unsigned int)(Music_end - Music_start) /
-        sizeof(short);
-
+        (unsigned int)(Music_end - Music_start) / sizeof(short);
     int channel;
     unsigned int i;
 
@@ -471,19 +379,13 @@ static int music_thread_func(
             if (music_position >= sample_count)
                 music_position = 0;
 
-            music_buffer[i] =
-                samples[music_position++];
-
+            music_buffer[i] = samples[music_position++];
         }
 
-        sceVaudioOutputBlocking(
-            MUSIC_VOLUME,
-            music_buffer
-        );
+        sceVaudioOutputBlocking(MUSIC_VOLUME, music_buffer);
     }
 
     sceVaudioChRelease();
-
     return 0;
 }
 
@@ -506,11 +408,7 @@ static void music_start(void)
 
     if (music_thread >= 0)
     {
-        sceKernelStartThread(
-            music_thread,
-            0,
-            NULL
-        );
+        sceKernelStartThread(music_thread, 0, NULL);
     }
     else
     {
@@ -524,11 +422,7 @@ static void music_stop(void)
 
     if (music_thread >= 0)
     {
-        sceKernelWaitThreadEnd(
-            music_thread,
-            NULL
-        );
-
+        sceKernelWaitThreadEnd(music_thread, NULL);
         music_thread = -1;
     }
 }
@@ -539,11 +433,9 @@ static void music_stop(void)
 
 static SceUtilityOskParams osk_params;
 static SceUtilityOskData osk_data;
-
 static unsigned short osk_desc[64];
 static unsigned short osk_input[32];
 static unsigned short osk_output[32];
-
 static int osk_started = 0;
 static int osk_shutdown_requested = 0;
 
@@ -557,75 +449,34 @@ static void ascii_to_ushort(
 
     while (i + 1 < cap && src[i] != '\0')
     {
-        dst[i] =
-            (unsigned short)(unsigned char)src[i];
-
-        i++;
+        dst[i] = (unsigned short)(unsigned char)src[i];
+        ++i;
     }
 
     dst[i] = 0;
 }
 
-static int osk_language_for_game_language(
-    int language
-)
+static int osk_language_for_game_language(int language)
 {
     switch (language)
     {
-        case 0:
-            return PSP_UTILITY_OSK_LANGUAGE_GERMAN;
-
-        case 1:
-            return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
-
-        case 2:
-            return PSP_UTILITY_OSK_LANGUAGE_FRENCH;
-
-        case 3:
-            return PSP_UTILITY_OSK_LANGUAGE_SPANISH;
-
-        case 4:
-            return PSP_UTILITY_OSK_LANGUAGE_ITALIAN;
-
-        case 5:
-            return PSP_UTILITY_OSK_LANGUAGE_DUTCH;
-
-        default:
-            return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
+        case 0: return PSP_UTILITY_OSK_LANGUAGE_GERMAN;
+        case 1: return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
+        case 2: return PSP_UTILITY_OSK_LANGUAGE_FRENCH;
+        case 3: return PSP_UTILITY_OSK_LANGUAGE_SPANISH;
+        case 4: return PSP_UTILITY_OSK_LANGUAGE_ITALIAN;
+        case 5: return PSP_UTILITY_OSK_LANGUAGE_DUTCH;
+        default: return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
     }
 }
 
 static void username_begin(void)
 {
-    memset(
-        &osk_params,
-        0,
-        sizeof(osk_params)
-    );
-
-    memset(
-        &osk_data,
-        0,
-        sizeof(osk_data)
-    );
-
-    memset(
-        osk_desc,
-        0,
-        sizeof(osk_desc)
-    );
-
-    memset(
-        osk_input,
-        0,
-        sizeof(osk_input)
-    );
-
-    memset(
-        osk_output,
-        0,
-        sizeof(osk_output)
-    );
+    memset(&osk_params, 0, sizeof(osk_params));
+    memset(&osk_data, 0, sizeof(osk_data));
+    memset(osk_desc, 0, sizeof(osk_desc));
+    memset(osk_input, 0, sizeof(osk_input));
+    memset(osk_output, 0, sizeof(osk_output));
 
     ascii_to_ushort(
         osk_desc,
@@ -634,9 +485,7 @@ static void username_begin(void)
     );
 
     osk_data.language =
-        osk_language_for_game_language(
-            selected_language
-        );
+        osk_language_for_game_language(selected_language);
 
     osk_data.inputtype =
         PSP_UTILITY_OSK_INPUTTYPE_LATIN_LOWERCASE |
@@ -650,19 +499,13 @@ static void username_begin(void)
     osk_data.outtext = osk_output;
     osk_data.outtextlimit = 16;
 
-    osk_params.base.size =
-        sizeof(osk_params);
-
-    osk_params.base.language =
-        PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
-
+    osk_params.base.size = sizeof(osk_params);
+    osk_params.base.language = PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
     osk_params.base.buttonSwap = 1;
-
     osk_params.base.graphicsThread = 0x11;
     osk_params.base.accessThread = 0x13;
     osk_params.base.fontThread = 0x12;
     osk_params.base.soundThread = 0x10;
-
     osk_params.datacount = 1;
     osk_params.data = &osk_data;
 
@@ -687,22 +530,18 @@ static void username_update(void)
         case PSP_UTILITY_OSK_DIALOG_VISIBLE:
         case PSP_UTILITY_OSK_DIALOG_INITING:
         case PSP_UTILITY_OSK_DIALOG_INITED:
-
             sceUtilityOskUpdate(1);
             break;
 
         case PSP_UTILITY_OSK_DIALOG_QUIT:
-
             if (!osk_shutdown_requested)
             {
                 sceUtilityOskShutdownStart();
                 osk_shutdown_requested = 1;
             }
-
             break;
 
         case PSP_UTILITY_OSK_DIALOG_FINISHED:
-
             if (!osk_shutdown_requested)
             {
                 sceUtilityOskShutdownStart();
@@ -715,14 +554,9 @@ static void username_update(void)
                 osk_started = 0;
                 osk_shutdown_requested = 0;
 
-                if (osk_data.result !=
-                    PSP_UTILITY_OSK_RESULT_CANCELLED)
+                if (osk_data.result != PSP_UTILITY_OSK_RESULT_CANCELLED)
                 {
-                    memset(
-                        save_data.username,
-                        0,
-                        sizeof(save_data.username)
-                    );
+                    memset(save_data.username, 0, sizeof(save_data.username));
 
                     for (i = 0;
                          i + 1 < sizeof(save_data.username) &&
@@ -731,23 +565,14 @@ static void username_update(void)
                          ++i)
                     {
                         save_data.username[i] =
-                            (osk_output[i] < 128)
-                            ? (char)osk_output[i]
-                            : '?';
+                            (osk_output[i] < 128) ?
+                            (char)osk_output[i] : '?';
                     }
 
                     if (save_data.username[0] == '\0')
-                    {
-                        strcpy(
-                            save_data.username,
-                            "PLAYER"
-                        );
-                    }
+                        strcpy(save_data.username, "PLAYER");
 
-                    /*
-                     * Hier NICHT sofort speichern.
-                     * Erst zum SAVE-Bildschirm.
-                     */
+                    /* Do not save yet. Go to explicit SAVE screen. */
                     state = GAME_STATE_SAVE;
                 }
                 else
@@ -755,7 +580,6 @@ static void username_update(void)
                     state = GAME_STATE_LANGUAGE;
                 }
             }
-
             break;
 
         default:
@@ -771,10 +595,7 @@ static void gu_init(void)
 {
     sceGuInit();
 
-    sceGuStart(
-        GU_DIRECT,
-        list
-    );
+    sceGuStart(GU_DIRECT, list);
 
     sceGuDrawBuffer(
         GU_PSM_5650,
@@ -818,56 +639,33 @@ static void gu_init(void)
         SCREEN_HEIGHT
     );
 
-    sceGuEnable(
-        GU_SCISSOR_TEST
-    );
-
-    sceGuDisable(
-        GU_DEPTH_TEST
-    );
-
-    sceGuDisable(
-        GU_CULL_FACE
-    );
+    sceGuEnable(GU_SCISSOR_TEST);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_CULL_FACE);
 
     sceGuFinish();
+    sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
 
-    sceGuSync(
-        GU_SYNC_FINISH,
-        GU_SYNC_WHAT_DONE
-    );
-
-    sceGuDisplay(
-        GU_TRUE
-    );
+    sceGuDisplay(GU_TRUE);
 }
 
 /* =========================================================
- * INITIALISIERUNG
+ * INIT
  * ========================================================= */
 
 int psp_game_init(void)
 {
     sceCtrlSetSamplingCycle(0);
-
-    sceCtrlSetSamplingMode(
-        PSP_CTRL_MODE_ANALOG
-    );
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
     gu_init();
 
     state = GAME_STATE_TITLE;
-
     selected_language = 0;
     selected_menu = 0;
-
     old_buttons = 0;
 
-    memset(
-        &save_data,
-        0,
-        sizeof(save_data)
-    );
+    memset(&save_data, 0, sizeof(save_data));
 
     game_initialized = 1;
 
@@ -892,34 +690,18 @@ void psp_game_update(void)
         return;
     }
 
-    sceCtrlReadBufferPositive(
-        &pad,
-        1
-    );
+    sceCtrlReadBufferPositive(&pad, 1);
 
-    pressed =
-        pad.Buttons & ~old_buttons;
-
+    pressed = pad.Buttons & ~old_buttons;
     old_buttons = pad.Buttons;
 
     switch (state)
     {
-        /* -------------------------------------------------
-         * TITEL
-         * ------------------------------------------------- */
         case GAME_STATE_TITLE:
-
             if (pressed & PSP_CTRL_START)
             {
-                /*
-                 * Musik startet erst beim PRESS START.
-                 */
                 music_start();
 
-                /*
-                 * Wenn bereits ein Save vorhanden ist,
-                 * direkt ins Hauptmenü.
-                 */
                 if (save_exists())
                 {
                     state = GAME_STATE_MAIN_MENU;
@@ -929,28 +711,24 @@ void psp_game_update(void)
                     state = GAME_STATE_LANGUAGE;
                 }
             }
-
             break;
 
-        /* -------------------------------------------------
-         * LANGUAGE
-         * ------------------------------------------------- */
         case GAME_STATE_LANGUAGE:
-
             if (pressed & PSP_CTRL_UP)
             {
                 if (selected_language > 0)
-                    selected_language--;
+                    --selected_language;
             }
 
             if (pressed & PSP_CTRL_DOWN)
             {
                 if (selected_language < 8)
-                    selected_language++;
+                    ++selected_language;
             }
 
             if (pressed & PSP_CTRL_CIRCLE)
             {
+                music_stop();
                 state = GAME_STATE_TITLE;
             }
 
@@ -959,69 +737,42 @@ void psp_game_update(void)
                 state = GAME_STATE_USERNAME;
                 username_begin();
             }
-
             break;
 
-        /* -------------------------------------------------
-         * SAVE
-         * ------------------------------------------------- */
         case GAME_STATE_SAVE:
-
+            /* X is the actual SAVE button. */
             if (pressed & PSP_CTRL_CROSS)
             {
-                /*
-                 * Sprache + Username speichern.
-                 */
                 save_game();
-
-                /*
-                 * Erst danach ins Hauptmenü.
-                 */
                 selected_menu = 0;
                 state = GAME_STATE_MAIN_MENU;
             }
 
             if (pressed & PSP_CTRL_CIRCLE)
             {
-                /*
-                 * Zurück zur Username-Eingabe.
-                 */
                 state = GAME_STATE_USERNAME;
                 username_begin();
             }
-
             break;
 
-        /* -------------------------------------------------
-         * MAIN MENU
-         * ------------------------------------------------- */
         case GAME_STATE_MAIN_MENU:
-
             if (pressed & PSP_CTRL_UP)
             {
                 if (selected_menu > 0)
-                    selected_menu--;
+                    --selected_menu;
             }
 
             if (pressed & PSP_CTRL_DOWN)
             {
                 if (selected_menu < 3)
-                    selected_menu++;
+                    ++selected_menu;
             }
 
-            /*
-             * X bestätigt die aktuell ausgewählte
-             * Hauptmenü-Option.
-             */
+            /* X confirms the highlighted menu item. */
             if (pressed & PSP_CTRL_CROSS)
             {
-                /*
-                 * Die Auswahl ist damit bestätigt.
-                 * Die eigentlichen Spielmodi können
-                 * anschließend ergänzt werden.
-                 */
+                /* Game modes can be wired in next. */
             }
-
             break;
 
         default:
@@ -1035,180 +786,83 @@ void psp_game_update(void)
 
 void psp_game_render(void)
 {
-    int save_text_x;
-    int prompt_text_x;
+    static const int language_line_y[9] =
+    {
+        54, 80, 107, 134, 161, 187, 214, 240, 266
+    };
+
+    static const int main_line_y[4] =
+    {
+        147, 175, 203, 231
+    };
+
+    static const int main_line_width[4] =
+    {
+        126, 165, 214, 176
+    };
+
+    int save_x;
+    int prompt_x;
 
     if (!game_initialized)
         return;
 
-    /*
-     * Während die PSP-OSK sichtbar ist,
-     * zeichnet die OSK ihren eigenen Dialog.
-     */
     if (state == GAME_STATE_USERNAME)
         return;
 
-    sceGuStart(
-        GU_DIRECT,
-        list
-    );
+    sceGuStart(GU_DIRECT, list);
 
-    sceGuClearColor(
-        0x00000000
-    );
-
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT
-    );
+    sceGuClearColor(0x00000000);
+    sceGuClear(GU_COLOR_BUFFER_BIT);
 
     switch (state)
     {
-        /* -------------------------------------------------
-         * TITEL
-         * ------------------------------------------------- */
         case GAME_STATE_TITLE:
-
-            draw_texture(
-                Title_start
-            );
-
+            draw_texture(Title_start);
             break;
 
-        /* -------------------------------------------------
-         * LANGUAGE
-         * ------------------------------------------------- */
         case GAME_STATE_LANGUAGE:
+            draw_texture(LanguageSelection_start);
 
-            draw_texture(
-                LanguageSelection_start
+            /* No white rectangle: just underline the selected word. */
+            draw_underline(
+                145,
+                language_line_y[selected_language],
+                70
             );
-
-            /*
-             * Auswahlbereich ungefähr über
-             * der aktuell gewählten Sprache.
-             */
-            sceGuColor(
-                0x50ffffff
-            );
-
-            {
-                typedef struct
-                {
-                    short x;
-                    short y;
-                    short z;
-                } SelectVertex;
-
-                SelectVertex *v =
-                    (SelectVertex *)sceGuGetMemory(
-                        2 * sizeof(SelectVertex)
-                    );
-
-                int y =
-                    25 + selected_language * 19;
-
-                v[0].x = 82;
-                v[0].y = y;
-                v[0].z = 0;
-
-                v[1].x = 360;
-                v[1].y = y + 18;
-                v[1].z = 0;
-
-                sceGuDrawArray(
-                    GU_SPRITES,
-                    GU_VERTEX_16BIT |
-                    GU_TRANSFORM_2D,
-                    2,
-                    NULL,
-                    v
-                );
-            }
-
             break;
 
-        /* -------------------------------------------------
-         * SAVE
-         * ------------------------------------------------- */
         case GAME_STATE_SAVE:
+            save_x =
+                (SCREEN_WIDTH - simple_text_width("SAVE", 6)) / 2;
 
-            /*
-             * Schwarzer Save-Bildschirm.
-             */
-            save_text_x =
-                (SCREEN_WIDTH -
-                 text_width("SAVE", 6)) / 2;
+            prompt_x =
+                (SCREEN_WIDTH - simple_text_width("PRESS X TO SAVE", 3)) / 2;
 
-            prompt_text_x =
-                (SCREEN_WIDTH -
-                 text_width("PRESS X TO SAVE", 3)) / 2;
-
-            draw_text(
+            draw_simple_text(
                 "SAVE",
-                save_text_x,
+                save_x,
                 80,
                 6
             );
 
-            draw_text(
+            draw_simple_text(
                 "PRESS X TO SAVE",
-                prompt_text_x,
+                prompt_x,
                 165,
                 3
             );
-
             break;
 
-        /* -------------------------------------------------
-         * MAIN MENU
-         * ------------------------------------------------- */
         case GAME_STATE_MAIN_MENU:
+            draw_texture(MainMenu_start);
 
-            draw_texture(
-                MainMenu_start
+            /* No filled white box: underline the selected option. */
+            draw_underline(
+                22,
+                main_line_y[selected_menu],
+                main_line_width[selected_menu]
             );
-
-            /*
-             * Aktuelle Menüauswahl.
-             */
-            sceGuColor(
-                0x35ffffff
-            );
-
-            {
-                typedef struct
-                {
-                    short x;
-                    short y;
-                    short z;
-                } SelectVertex;
-
-                SelectVertex *v =
-                    (SelectVertex *)sceGuGetMemory(
-                        2 * sizeof(SelectVertex)
-                    );
-
-                int y =
-                    130 + selected_menu * 28;
-
-                v[0].x = 18;
-                v[0].y = y;
-                v[0].z = 0;
-
-                v[1].x = 190;
-                v[1].y = y + 22;
-                v[1].z = 0;
-
-                sceGuDrawArray(
-                    GU_SPRITES,
-                    GU_VERTEX_16BIT |
-                    GU_TRANSFORM_2D,
-                    2,
-                    NULL,
-                    v
-                );
-            }
-
             break;
 
         default:
@@ -1216,14 +870,8 @@ void psp_game_render(void)
     }
 
     sceGuFinish();
-
-    sceGuSync(
-        GU_SYNC_FINISH,
-        GU_SYNC_WHAT_DONE
-    );
-
+    sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
     sceDisplayWaitVblankStart();
-
     sceGuSwapBuffers();
 }
 
@@ -1238,17 +886,14 @@ void psp_game_shutdown(void)
 
     music_stop();
 
-    sceGuDisplay(
-        GU_FALSE
-    );
-
+    sceGuDisplay(GU_FALSE);
     sceGuTerm();
 
     game_initialized = 0;
 }
 
 /* =========================================================
- * WRAPPER
+ * COMPATIBILITY WRAPPERS
  * ========================================================= */
 
 void game_init(void)
