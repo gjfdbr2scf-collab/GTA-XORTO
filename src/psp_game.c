@@ -31,7 +31,8 @@
  * SYSTEM SETTINGS
  *
  * Story:
- * cinematic van intro -> two brothers exit -> cousin opens door
+ * cinematic van intro -> two brothers exit (older + youngest child)
+ * -> third cousin opens door
  * -> player takes control -> walk together through Peine -> bridge
  *
  * Music:
@@ -1164,6 +1165,74 @@ static void draw_human(
         0.66f,
         0.22f,
         0.66f,
+        0xff392e29
+    );
+}
+
+static void draw_child(
+    float x,
+    float y,
+    float z,
+    float yaw,
+    unsigned int shirt
+)
+{
+    ScePspFVector3 pos;
+    ScePspFVector3 scale;
+
+    /* Younger brother: smaller, child-sized proportions. */
+    draw_cube(
+        x,
+        y + 0.42f,
+        z,
+        0.46f,
+        0.84f,
+        0.38f,
+        0xff293342
+    );
+
+    pos.x = x;
+    pos.y = y + 1.05f;
+    pos.z = z;
+
+    scale.x = 0.72f;
+    scale.y = 0.82f;
+    scale.z = 0.50f;
+
+    sceGuColor(shirt);
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumRotateY(yaw);
+    sceGumScale(&scale);
+
+    sceGumDrawArray(
+        GU_TRIANGLES,
+        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        36,
+        NULL,
+        cube_vertices
+    );
+
+    sceGumPopMatrix();
+
+    draw_cube(
+        x,
+        y + 1.74f,
+        z,
+        0.54f,
+        0.58f,
+        0.54f,
+        0xffd3a17d
+    );
+
+    draw_cube(
+        x,
+        y + 2.02f,
+        z,
+        0.58f,
+        0.18f,
+        0.58f,
         0xff392e29
     );
 }
@@ -2838,7 +2907,7 @@ static void render_story_intro(void)
             0xff4d79af
         );
 
-        draw_human(
+        draw_child(
             intro_bro2_x,
             0.0f,
             intro_bro2_z,
@@ -3151,10 +3220,18 @@ void psp_game_render(void)
 
         case GAME_STATE_STORY_INTRO:
 
+            sceGuEnable(GU_DEPTH_TEST);
+            sceGuDepthFunc(GU_GEQUAL);
+            sceGuDepthMask(GU_TRUE);
+
             render_story_intro();
             break;
 
         case GAME_STATE_STORY:
+
+            sceGuEnable(GU_DEPTH_TEST);
+            sceGuDepthFunc(GU_GEQUAL);
+            sceGuDepthMask(GU_TRUE);
 
             set_third_person_camera();
 
@@ -3163,7 +3240,7 @@ void psp_game_render(void)
             /*
              * Player and brother.
              */
-            draw_human(
+            draw_child(
                 player_x,
                 player_y,
                 player_z,
@@ -3179,6 +3256,15 @@ void psp_game_render(void)
                 0xff7f8f5d
             );
 
+            /* Third cousin remains near the house after the intro. */
+            draw_human(
+                -10.5f,
+                0.0f,
+                12.0f,
+                0.0f,
+                0xff9a6a49
+            );
+
             render_game_hud(
                 "STORY MODE"
             );
@@ -3187,11 +3273,15 @@ void psp_game_render(void)
 
         case GAME_STATE_FREE_WORLD:
 
+            sceGuEnable(GU_DEPTH_TEST);
+            sceGuDepthFunc(GU_GEQUAL);
+            sceGuDepthMask(GU_TRUE);
+
             set_third_person_camera();
 
             render_city_world();
 
-            draw_human(
+            draw_child(
                 player_x,
                 player_y,
                 player_z,
@@ -3207,6 +3297,10 @@ void psp_game_render(void)
 
         case GAME_STATE_MULTIPLAYER:
 
+            sceGuEnable(GU_DEPTH_TEST);
+            sceGuDepthFunc(GU_GEQUAL);
+            sceGuDepthMask(GU_TRUE);
+
             set_3d_camera(
                 player_x -
                 sinf(player_yaw) * 9.0f,
@@ -3220,7 +3314,7 @@ void psp_game_render(void)
 
             render_city_world();
 
-            draw_human(
+            draw_child(
                 player_x,
                 0.0f,
                 player_z,
