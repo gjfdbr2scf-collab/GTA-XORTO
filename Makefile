@@ -1,7 +1,6 @@
 TARGET = EBOOT.PBP
 
 OBJS = src/main.o \
-       src/game.o \
        src/psp_game.o \
        src/psp_input.o \
        mainmenu.o
