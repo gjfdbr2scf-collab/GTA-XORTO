@@ -10,7 +10,7 @@ INCDIR = include
 CFLAGS = -O2 -G0 -Wall
 ASFLAGS = $(CFLAGS)
 
-LIBS = -lpspgu
+LIBS = -lpspgum -lpspgu
 
 EXTRA_TARGETS = EBOOT.PBP
 
