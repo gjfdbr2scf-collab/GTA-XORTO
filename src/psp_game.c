@@ -186,7 +186,6 @@ static int current_vehicle = -1;
 
 /* Local second player */
 static float player2_x = 4.0f;
-static float player2_y = 0.0f;
 static float player2_z = 4.5f;
 static float player2_yaw = PI_F;
 
@@ -506,6 +505,8 @@ static void draw_text(
         v
     );
 }
+
+static void draw_texture(const void *texture);
 
 static void draw_rect_2d(
     int x,
