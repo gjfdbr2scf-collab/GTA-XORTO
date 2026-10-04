@@ -50,7 +50,7 @@ static const MenuArea main_menu_areas[MENU_COUNT] =
 /* =========================================================
  * Initialisierung
  * ========================================================= */
-void psp_game_init(void)
+int psp_game_init(void)
 {
     psp_input_init();
 
@@ -115,6 +115,8 @@ void psp_game_init(void)
     selected_menu = 0;
     button_lock = 0;
     current_screen = 0;
+
+    return 0;
 }
 
 
@@ -123,10 +125,21 @@ void psp_game_init(void)
  * ========================================================= */
 void psp_game_update(void)
 {
+    const PSPInputState *input;
+
     if (!game_initialized)
         return;
 
     psp_input_update();
+    input = psp_input_get_state();
+
+    if (button_lock > 0)
+    {
+        button_lock--;
+        return;
+    }
+
+    (void)input;
 }
 
 
@@ -135,19 +148,25 @@ void psp_game_update(void)
  * ========================================================= */
 void psp_game_render(void)
 {
+    typedef struct
+    {
+        unsigned short u;
+        unsigned short v;
+        unsigned int color;
+        short x;
+        short y;
+        short z;
+    } Vertex;
+
+    Vertex *vertices;
+
     if (!game_initialized)
         return;
 
     sceGuStart(GU_DIRECT, list);
 
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT
-    );
+    sceGuClear(GU_COLOR_BUFFER_BIT);
 
-    /*
-     * MainMenu.raw ist 512x512 RGB565.
-     * Angezeigt wird der sichtbare Bereich.
-     */
     sceGuTexMode(
         GU_PSM_5650,
         0,
@@ -184,19 +203,7 @@ void psp_game_render(void)
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
 
-    typedef struct
-    {
-        unsigned short u;
-        unsigned short v;
-        unsigned int color;
-        short x;
-        short y;
-        short z;
-    } Vertex;
-
-    Vertex *vertices = (Vertex *)sceGuGetMemory(
-        2 * sizeof(Vertex)
-    );
+    vertices = (Vertex *)sceGuGetMemory(2 * sizeof(Vertex));
 
     vertices[0].u = 0;
     vertices[0].v = 0;
@@ -247,10 +254,9 @@ void psp_game_shutdown(void)
 }
 
 
-/*
- * Kompatibilitätsfunktionen für game.h,
- * falls main.c diese Namen verwendet.
- */
+/* =========================================================
+ * Wrapper für game.h
+ * ========================================================= */
 void game_init(void)
 {
     psp_game_init();
