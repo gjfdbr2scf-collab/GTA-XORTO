@@ -88,8 +88,9 @@ static float player2_y = 145.0f;
 
 static int flower_collected = 0;
 
-/* Forward declaration used by fade transitions */
+/* Forward declarations used before their definitions */
 static void username_begin(void);
+static void start_transition(GameState next_state);
 
 /* Music */
 static volatile int music_running = 0;
