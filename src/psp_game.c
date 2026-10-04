@@ -506,8 +506,6 @@ static void draw_text(
     );
 }
 
-static void draw_texture(const void *texture);
-
 static void draw_rect_2d(
     int x,
     int y,
@@ -546,6 +544,92 @@ static void draw_rect_2d(
         v
     );
 }
+
+
+/* ------------------------------------------------------------------------- */
+/* Embedded texture rendering                                                */
+/* ------------------------------------------------------------------------- */
+
+static void draw_texture(const void *texture)
+{
+    typedef struct
+    {
+        unsigned short u;
+        unsigned short v;
+        unsigned int color;
+        short x;
+        short y;
+        short z;
+    } TextureVertex;
+
+    TextureVertex *v =
+        (TextureVertex *)sceGuGetMemory(
+            2 * sizeof(TextureVertex)
+        );
+
+    /*
+     * Assets are packed as 512x512 RGB565 textures.
+     * Only the 480x272 visible area is drawn.
+     */
+    v[0].u = 0;
+    v[0].v = 0;
+    v[0].color = 0xffffffff;
+    v[0].x = 0;
+    v[0].y = 0;
+    v[0].z = 0;
+
+    v[1].u = SCREEN_WIDTH;
+    v[1].v = SCREEN_HEIGHT;
+    v[1].color = 0xffffffff;
+    v[1].x = SCREEN_WIDTH;
+    v[1].y = SCREEN_HEIGHT;
+    v[1].z = 0;
+
+    sceGuTexMode(
+        GU_PSM_5650,
+        0,
+        0,
+        GU_FALSE
+    );
+
+    sceGuTexImage(
+        0,
+        512,
+        512,
+        512,
+        texture
+    );
+
+    sceGuTexFunc(
+        GU_TFX_REPLACE,
+        GU_TCC_RGB
+    );
+
+    sceGuTexFilter(
+        GU_NEAREST,
+        GU_NEAREST
+    );
+
+    sceGuEnable(
+        GU_TEXTURE_2D
+    );
+
+    sceGuDrawArray(
+        GU_SPRITES,
+        GU_TEXTURE_16BIT |
+        GU_COLOR_8888 |
+        GU_VERTEX_16BIT |
+        GU_TRANSFORM_2D,
+        2,
+        NULL,
+        v
+    );
+
+    sceGuDisable(
+        GU_TEXTURE_2D
+    );
+}
+
 
 /* ------------------------------------------------------------------------- */
 /* Save                                                                       */
