@@ -59,7 +59,8 @@ typedef enum
     GAME_STATE_LANGUAGE,
     GAME_STATE_USERNAME,
     GAME_STATE_SAVE,
-    GAME_STATE_SAVE_SUCCESS,
+    GAME_STATE_SAVING,
+    GAME_STATE_SAVE_FINISHED,
     GAME_STATE_MAIN_MENU,
     GAME_STATE_STORY,
     GAME_STATE_FREE_WORLD,
@@ -102,8 +103,9 @@ static int transition_phase = 0; /* 0 = dunkel werden, 1 = hell werden */
 static int transition_alpha = 0;
 static GameState transition_target = GAME_STATE_TITLE;
 
-/* Wie lange die Erfolgsmeldung stehen bleibt */
-static int save_success_timer = 0;
+/* Save-Anzeigezeiten */
+static int saving_timer = 0;
+static int save_finished_timer = 0;
 
 /* ------------------------------------------------------------
  * Story / Free World / Multiplayer
@@ -776,8 +778,11 @@ static void update_transition(void)
 
             state = transition_target;
 
-            if (state == GAME_STATE_SAVE_SUCCESS)
-                save_success_timer = 0;
+            if (state == GAME_STATE_SAVING)
+                saving_timer = 0;
+
+            if (state == GAME_STATE_SAVE_FINISHED)
+                save_finished_timer = 0;
 
             transition_phase = 1;
         }
@@ -1452,7 +1457,8 @@ int psp_game_init(void)
     transition_phase = 0;
     transition_alpha = 0;
 
-    save_success_timer = 0;
+    saving_timer = 0;
+    save_finished_timer = 0;
 
     memset(
         &save_data,
@@ -1499,14 +1505,29 @@ void psp_game_update(void)
     }
 
     /*
-     * Erfolgsmeldung automatisch nach kurzer Zeit
-     * zum Main Menu überblenden.
+     * Nach dem Speichern zeigen wir bewusst zwei getrennte
+     * Bildschirme. Dadurch ist der Ablauf deutlich sichtbar:
+     * SAVE FILE -> SAVING -> FINISH SAVE -> Main Menu.
      */
-    if (state == GAME_STATE_SAVE_SUCCESS)
+    if (state == GAME_STATE_SAVING)
     {
-        ++save_success_timer;
+        ++saving_timer;
 
-        if (save_success_timer >= 100)
+        if (saving_timer >= 70)
+        {
+            start_transition(
+                GAME_STATE_SAVE_FINISHED
+            );
+        }
+
+        return;
+    }
+
+    if (state == GAME_STATE_SAVE_FINISHED)
+    {
+        ++save_finished_timer;
+
+        if (save_finished_timer >= 100)
         {
             start_transition(
                 GAME_STATE_MAIN_MENU
@@ -1604,16 +1625,16 @@ void psp_game_update(void)
                 (PSP_CTRL_CROSS | PSP_CTRL_START))
             {
                 /*
-                 * Sprache + Username speichern.
+                 * Sprache + Username jetzt wirklich speichern.
                  */
                 save_game();
 
                 /*
-                 * Danach zuerst dunkel werden und
-                 * die Erfolgsmeldung anzeigen.
+                 * Erst in einen schwarzen/ruhigen Übergang
+                 * und danach in den SAVING-Bildschirm.
                  */
                 start_transition(
-                    GAME_STATE_SAVE_SUCCESS
+                    GAME_STATE_SAVING
                 );
             }
 
@@ -2008,22 +2029,74 @@ void psp_game_render(void)
             break;
 
         /* ----------------------------------------------------
-         * SAVE SUCCESS
+         * SAVING
          * ---------------------------------------------------- */
-        case GAME_STATE_SAVE_SUCCESS:
+        case GAME_STATE_SAVING:
 
             center_x =
                 (SCREEN_WIDTH -
                  text_width(
-                     "THE DATA HAS SUCCESSFUL SAVED",
-                     2
+                     "SAVE FILE",
+                     4
                  )) / 2;
 
             draw_text(
-                "THE DATA HAS SUCCESSFUL SAVED",
+                "SAVE FILE",
                 center_x,
-                105,
-                2,
+                65,
+                4,
+                0xffffffff
+            );
+
+            center_x =
+                (SCREEN_WIDTH -
+                 text_width(
+                     "SAVING",
+                     4
+                 )) / 2;
+
+            draw_text(
+                "SAVING",
+                center_x,
+                135,
+                4,
+                0xffffffff
+            );
+
+            break;
+
+        /* ----------------------------------------------------
+         * FINISH SAVE
+         * ---------------------------------------------------- */
+        case GAME_STATE_SAVE_FINISHED:
+
+            center_x =
+                (SCREEN_WIDTH -
+                 text_width(
+                     "FINISH SAVE",
+                     3
+                 )) / 2;
+
+            draw_text(
+                "FINISH SAVE",
+                center_x,
+                76,
+                3,
+                0xffffffff
+            );
+
+            center_x =
+                (SCREEN_WIDTH -
+                 text_width(
+                     "DATA SAVED",
+                     3
+                 )) / 2;
+
+            draw_text(
+                "DATA SAVED",
+                center_x,
+                132,
+                3,
                 0xffffffff
             );
 
