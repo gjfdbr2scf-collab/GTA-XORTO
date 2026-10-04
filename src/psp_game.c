@@ -176,6 +176,8 @@ static float player_x = 0.0f;
 static float player_y = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f;
+static float camera_pitch = -0.08f;
+static float walk_bob = 0.0f;
 
 static float brother_x = -2.0f;
 static float brother_y = 0.0f;
@@ -1673,42 +1675,64 @@ static void set_3d_camera(
     sceGumLoadIdentity();
 }
 
-static void set_third_person_camera(void)
+static void set_first_person_camera(void)
 {
     float fx;
     float fz;
+    float eye_y;
 
-    if (in_vehicle &&
-        current_vehicle >= 0)
+    if (in_vehicle && current_vehicle >= 0)
     {
         CityCar *c = &cars[current_vehicle];
 
         fx = sinf(c->yaw);
         fz = -cosf(c->yaw);
 
+        /* Driver/passenger eye position, just ahead of the car center. */
         set_3d_camera(
-            c->x - fx * 9.0f,
-            5.2f,
-            c->z - fz * 9.0f,
-            c->x + fx * 3.0f,
-            1.4f,
-            c->z + fz * 3.0f
+            c->x + fx * 0.18f,
+            1.48f,
+            c->z + fz * 0.18f,
+            c->x + fx * 8.0f,
+            1.42f,
+            c->z + fz * 8.0f
         );
+        return;
     }
-    else
-    {
-        fx = sinf(player_yaw);
-        fz = -cosf(player_yaw);
 
-        set_3d_camera(
-            player_x - fx * 8.0f,
-            4.8f,
-            player_z - fz * 8.0f,
-            player_x + fx * 2.4f,
-            1.4f,
-            player_z + fz * 2.4f
-        );
-    }
+    fx = sinf(player_yaw);
+    fz = -cosf(player_yaw);
+
+    eye_y = 1.58f + sinf(walk_bob) * 0.018f;
+
+    set_3d_camera(
+        player_x,
+        eye_y,
+        player_z,
+        player_x + fx * 8.0f,
+        eye_y + camera_pitch,
+        player_z + fz * 8.0f
+    );
+}
+
+static void update_first_person_look(
+    const SceCtrlData *pad
+)
+{
+    if (!pad || in_vehicle)
+        return;
+
+    if (pad->Buttons & PSP_CTRL_LTRIGGER)
+        player_yaw -= 0.045f;
+
+    if (pad->Buttons & PSP_CTRL_RTRIGGER)
+        player_yaw += 0.045f;
+
+    while (player_yaw > PI_F)
+        player_yaw -= 2.0f * PI_F;
+
+    while (player_yaw < -PI_F)
+        player_yaw += 2.0f * PI_F;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1880,6 +1904,8 @@ static void move_walker(
     float lx;
     float ly;
     float mag;
+    float move_x;
+    float move_z;
 
     lx =
         ((float)pad->Lx - 128.0f) /
@@ -1905,63 +1931,36 @@ static void move_walker(
         sqrtf(lx * lx + ly * ly);
 
     if (mag < 0.18f)
+    {
+        walk_bob *= 0.90f;
         return;
+    }
 
     if (mag > 1.0f)
         mag = 1.0f;
 
     {
-        float forward_x =
-            sinf(player_yaw);
+        const float forward_x = sinf(player_yaw);
+        const float forward_z = -cosf(player_yaw);
+        const float right_x = cosf(player_yaw);
+        const float right_z = sinf(player_yaw);
+        const float speed = 0.20f * mag;
 
-        float forward_z =
-            -cosf(player_yaw);
+        move_x = forward_x * (-ly) + right_x * lx;
+        move_z = forward_z * (-ly) + right_z * lx;
 
-        float right_x =
-            cosf(player_yaw);
-
-        float right_z =
-            sinf(player_yaw);
-
-        player_x +=
-            (forward_x * (-ly) +
-             right_x * lx) *
-            0.22f;
-
-        player_z +=
-            (forward_z * (-ly) +
-             right_z * lx) *
-            0.22f;
+        player_x += move_x * speed;
+        player_z += move_z * speed;
 
         clamp_world_position(
             &player_x,
             &player_z
         );
 
-        /*
-         * Face movement direction.
-         */
-        {
-            float target =
-                atan2f(
-                    forward_x * (-ly) +
-                    right_x * lx,
-                    -(forward_z * (-ly) +
-                      right_z * lx)
-                );
+        walk_bob += 0.32f * (mag + 0.25f);
 
-            float delta =
-                target - player_yaw;
-
-            while (delta > PI_F)
-                delta -= 2.0f * PI_F;
-
-            while (delta < -PI_F)
-                delta += 2.0f * PI_F;
-
-            player_yaw +=
-                delta * 0.16f;
-        }
+        if (walk_bob > 6.2831853f)
+            walk_bob -= 6.2831853f;
     }
 }
 
@@ -2596,6 +2595,8 @@ void psp_game_update(void)
 
         case GAME_STATE_STORY:
 
+            update_first_person_look(&pad);
+
             if (in_vehicle)
                 update_car(&pad);
             else
@@ -2662,6 +2663,8 @@ void psp_game_update(void)
             break;
 
         case GAME_STATE_FREE_WORLD:
+
+            update_first_person_look(&pad);
 
             if (in_vehicle)
                 update_car(&pad);
@@ -3233,21 +3236,11 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_third_person_camera();
+            set_first_person_camera();
 
             render_city_world();
 
-            /*
-             * Player and brother.
-             */
-            draw_child(
-                player_x,
-                player_y,
-                player_z,
-                player_yaw,
-                0xff4d79af
-            );
-
+            /* Local player is represented by the first-person camera. */
             draw_human(
                 brother_x,
                 brother_y,
@@ -3277,17 +3270,9 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_third_person_camera();
+            set_first_person_camera();
 
             render_city_world();
-
-            draw_child(
-                player_x,
-                player_y,
-                player_z,
-                player_yaw,
-                0xff4d79af
-            );
 
             render_game_hud(
                 "FREE OPEN WORLD"
@@ -3301,26 +3286,9 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_3d_camera(
-                player_x -
-                sinf(player_yaw) * 9.0f,
-                5.0f,
-                player_z +
-                cosf(player_yaw) * 9.0f,
-                player_x,
-                1.4f,
-                player_z
-            );
+            set_first_person_camera();
 
             render_city_world();
-
-            draw_child(
-                player_x,
-                0.0f,
-                player_z,
-                player_yaw,
-                0xff4d79af
-            );
 
             draw_human(
                 player2_x,
