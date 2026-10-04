@@ -3,8 +3,6 @@
 #include <pspdisplay.h>
 #include <pspgu.h>
 #include <psputility.h>
-#include <psputility_osk.h>
-#include <psputility_sysparam.h>
 #include <pspiofilemgr.h>
 #include <pspvaudio.h>
 
@@ -57,7 +55,6 @@ typedef enum
 {
     GAME_STATE_TITLE = 0,
     GAME_STATE_LANGUAGE,
-    GAME_STATE_USERNAME,
     GAME_STATE_SAVE,
     GAME_STATE_SAVING,
     GAME_STATE_SAVE_FINISHED,
@@ -75,7 +72,7 @@ typedef struct
 {
     unsigned int magic;
     int language;
-    char username[32];
+    char username[32]; /* kept only for compatibility with older save data */
 } SaveData;
 
 /* ------------------------------------------------------------
@@ -129,19 +126,6 @@ static SceUID music_thread = -1;
 static short __attribute__((aligned(64)))
     music_buffer[MUSIC_SAMPLES];
 
-/* ------------------------------------------------------------
- * PSP OSK / Username
- * ------------------------------------------------------------ */
-static SceUtilityOskParams osk_params;
-static SceUtilityOskData osk_data;
-
-static unsigned short osk_desc[64];
-static unsigned short osk_input[32];
-static unsigned short osk_output[32];
-
-static int osk_started = 0;
-static int osk_shutdown_requested = 0;
-
 /* ============================================================
  * FORWARD DECLARATIONS
  * ============================================================ */
@@ -157,8 +141,6 @@ static void load_game(void);
 static void music_start(void);
 static void music_stop(void);
 
-static void username_begin(void);
-static void username_update(void);
 
 /* ============================================================
  * SAVE
@@ -925,234 +907,6 @@ static void music_stop(void)
 }
 
 /* ============================================================
- * USERNAME / OSK
- * ============================================================ */
-
-static void ascii_to_ushort(
-    unsigned short *dst,
-    unsigned int cap,
-    const char *src
-)
-{
-    unsigned int i = 0;
-
-    while (i + 1 < cap &&
-           src[i] != '\0')
-    {
-        dst[i] =
-            (unsigned short)
-            (unsigned char)src[i];
-
-        ++i;
-    }
-
-    dst[i] = 0;
-}
-
-static int osk_language_for_game_language(
-    int language
-)
-{
-    switch (language)
-    {
-        case 0:
-            return PSP_UTILITY_OSK_LANGUAGE_GERMAN;
-
-        case 1:
-            return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
-
-        case 2:
-            return PSP_UTILITY_OSK_LANGUAGE_FRENCH;
-
-        case 3:
-            return PSP_UTILITY_OSK_LANGUAGE_SPANISH;
-
-        case 4:
-            return PSP_UTILITY_OSK_LANGUAGE_ITALIAN;
-
-        case 5:
-            return PSP_UTILITY_OSK_LANGUAGE_DUTCH;
-
-        default:
-            return PSP_UTILITY_OSK_LANGUAGE_ENGLISH;
-    }
-}
-
-static void username_begin(void)
-{
-    memset(
-        &osk_params,
-        0,
-        sizeof(osk_params)
-    );
-
-    memset(
-        &osk_data,
-        0,
-        sizeof(osk_data)
-    );
-
-    memset(
-        osk_desc,
-        0,
-        sizeof(osk_desc)
-    );
-
-    memset(
-        osk_input,
-        0,
-        sizeof(osk_input)
-    );
-
-    memset(
-        osk_output,
-        0,
-        sizeof(osk_output)
-    );
-
-    ascii_to_ushort(
-        osk_desc,
-        64,
-        "CHOOSE USERNAME"
-    );
-
-    osk_data.language =
-        osk_language_for_game_language(
-            selected_language
-        );
-
-    osk_data.inputtype =
-        PSP_UTILITY_OSK_INPUTTYPE_LATIN_LOWERCASE |
-        PSP_UTILITY_OSK_INPUTTYPE_LATIN_UPPERCASE |
-        PSP_UTILITY_OSK_INPUTTYPE_LATIN_DIGIT;
-
-    osk_data.lines = 1;
-    osk_data.desc = osk_desc;
-    osk_data.intext = osk_input;
-    osk_data.outtextlength = 32;
-    osk_data.outtext = osk_output;
-    osk_data.outtextlimit = 16;
-
-    osk_params.base.size =
-        sizeof(osk_params);
-
-    osk_params.base.language =
-        PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
-
-    osk_params.base.buttonSwap = 1;
-
-    osk_params.base.graphicsThread = 0x11;
-    osk_params.base.accessThread = 0x13;
-    osk_params.base.fontThread = 0x12;
-    osk_params.base.soundThread = 0x10;
-
-    osk_params.datacount = 1;
-    osk_params.data = &osk_data;
-
-    if (sceUtilityOskInitStart(&osk_params) >= 0)
-    {
-        osk_started = 1;
-        osk_shutdown_requested = 0;
-    }
-}
-
-static void username_update(void)
-{
-    int status;
-
-    if (!osk_started)
-        return;
-
-    status = sceUtilityOskGetStatus();
-
-    switch (status)
-    {
-        case PSP_UTILITY_OSK_DIALOG_VISIBLE:
-        case PSP_UTILITY_OSK_DIALOG_INITING:
-        case PSP_UTILITY_OSK_DIALOG_INITED:
-
-            sceUtilityOskUpdate(1);
-            break;
-
-        case PSP_UTILITY_OSK_DIALOG_QUIT:
-
-            if (!osk_shutdown_requested)
-            {
-                sceUtilityOskShutdownStart();
-                osk_shutdown_requested = 1;
-            }
-
-            break;
-
-        case PSP_UTILITY_OSK_DIALOG_FINISHED:
-
-            if (!osk_shutdown_requested)
-            {
-                sceUtilityOskShutdownStart();
-                osk_shutdown_requested = 1;
-            }
-            else
-            {
-                unsigned int i;
-
-                osk_started = 0;
-                osk_shutdown_requested = 0;
-
-                if (osk_data.result !=
-                    PSP_UTILITY_OSK_RESULT_CANCELLED)
-                {
-                    memset(
-                        save_data.username,
-                        0,
-                        sizeof(save_data.username)
-                    );
-
-                    for (i = 0;
-                         i + 1 <
-                         sizeof(save_data.username) &&
-                         i < 31 &&
-                         osk_output[i] != 0;
-                         ++i)
-                    {
-                        save_data.username[i] =
-                            (osk_output[i] < 128)
-                            ? (char)osk_output[i]
-                            : '?';
-                    }
-
-                    if (save_data.username[0] == '\0')
-                    {
-                        strcpy(
-                            save_data.username,
-                            "PLAYER"
-                        );
-                    }
-
-                    /*
-                     * Username fertig:
-                     * erst dunkel werden,
-                     * dann SAVE sichtbar machen.
-                     */
-                    start_transition(
-                        GAME_STATE_SAVE
-                    );
-                }
-                else
-                {
-                    start_transition(
-                        GAME_STATE_LANGUAGE
-                    );
-                }
-            }
-
-            break;
-
-        default:
-            break;
-    }
-}
-
-/* ============================================================
  * WELT
  * ============================================================ */
 
@@ -1496,15 +1250,6 @@ void psp_game_update(void)
     }
 
     /*
-     * Username-OSK verarbeitet sich separat.
-     */
-    if (state == GAME_STATE_USERNAME)
-    {
-        username_update();
-        return;
-    }
-
-    /*
      * Nach dem Speichern zeigen wir bewusst zwei getrennte
      * Bildschirme. Dadurch ist der Ablauf deutlich sichtbar:
      * SAVE FILE -> SAVING -> FINISH SAVE -> Main Menu.
@@ -1605,8 +1350,16 @@ void psp_game_update(void)
 
             if (pressed & PSP_CTRL_CROSS)
             {
-                state = GAME_STATE_USERNAME;
-                username_begin();
+                /*
+                 * Keine Username-Eingabe mehr.
+                 * Die ausgewählte Sprache wird direkt
+                 * für den Speichervorgang übernommen.
+                 */
+                save_data.language = selected_language;
+
+                start_transition(
+                    GAME_STATE_SAVE
+                );
             }
 
             break;
@@ -1641,10 +1394,11 @@ void psp_game_update(void)
             if (pressed & PSP_CTRL_CIRCLE)
             {
                 /*
-                 * Zurück zur Username-Eingabe.
+                 * Zurück zur Sprachauswahl.
                  */
-                state = GAME_STATE_USERNAME;
-                username_begin();
+                start_transition(
+                    GAME_STATE_LANGUAGE
+                );
             }
 
             break;
@@ -1913,15 +1667,6 @@ void psp_game_render(void)
     if (!game_initialized)
         return;
 
-    /*
-     * Wenn die PSP-OSK offen ist, zeichnet das Betriebssystem
-     * den Dialog selbst.
-     */
-    if (state == GAME_STATE_USERNAME &&
-        !transition_active)
-    {
-        return;
-    }
 
     sceGuStart(
         GU_DIRECT,
