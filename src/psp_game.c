@@ -390,6 +390,17 @@ static unsigned int gu_color_rgba(int r, int g, int b, int a)
            (unsigned int)r;
 }
 
+/* Convert the project's conventional 0xAARRGGBB constants to PSP GU order. */
+static unsigned int gu_color_from_argb(unsigned int argb)
+{
+    unsigned int a = argb & 0xff000000;
+    unsigned int r = (argb >> 16) & 0xff;
+    unsigned int g = (argb >> 8) & 0xff;
+    unsigned int b = argb & 0xff;
+
+    return a | (b << 16) | (g << 8) | r;
+}
+
 static unsigned int shade_gu_color(unsigned int color, int percent)
 {
     int r = (int)(color & 0xff);
@@ -847,6 +858,34 @@ static void draw_uv_sphere(
     }
 }
 
+static void draw_ellipsoid(
+    float x,
+    float y,
+    float z,
+    float sx,
+    float sy,
+    float sz,
+    int texture_id,
+    unsigned int color
+)
+{
+    ScePspFVector3 pos;
+    ScePspFVector3 scale;
+
+    pos.x = x;
+    pos.y = y;
+    pos.z = z;
+    scale.x = sx;
+    scale.y = sy;
+    scale.z = sz;
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumScale(&scale);
+    draw_uv_sphere(0.0f, 0.0f, 0.0f, 1.0f, texture_id, color);
+    sceGumPopMatrix();
+}
+
 typedef struct
 {
     unsigned int color;
@@ -898,15 +937,82 @@ static void draw_shadow_blob(float x, float z, float sx, float sz)
     sceGuDisable(GU_BLEND);
 }
 
+static void draw_window_z(
+    float x,
+    float y,
+    float z,
+    float w,
+    float h,
+    int facing_sign,
+    unsigned int glass_color
+)
+{
+    float frame_w = w + 0.12f;
+    float frame_h = h + 0.14f;
+    unsigned int frame_color = gu_color_rgba(196, 188, 168, 255);
+
+    draw_textured_quad(
+        x-frame_w*0.5f,y-0.07f,z,
+        x+frame_w*0.5f,y-0.07f,z,
+        x+frame_w*0.5f,y+frame_h-0.07f,z,
+        x-frame_w*0.5f,y+frame_h-0.07f,z,
+        TEX_METAL,
+        frame_color
+    );
+    draw_textured_quad(
+        x-w*0.5f,y,z+facing_sign*0.026f,
+        x+w*0.5f,y,z+facing_sign*0.026f,
+        x+w*0.5f,y+h,z+facing_sign*0.026f,
+        x-w*0.5f,y+h,z+facing_sign*0.026f,
+        TEX_GLASS,
+        glass_color
+    );
+}
+
+static void draw_window_x(
+    float x,
+    float y,
+    float z,
+    float w,
+    float h,
+    int facing_sign,
+    unsigned int glass_color
+)
+{
+    float frame_w = w + 0.12f;
+    float frame_h = h + 0.14f;
+    unsigned int frame_color = gu_color_rgba(196, 188, 168, 255);
+
+    draw_textured_quad(
+        x,y-0.07f,z-frame_w*0.5f,
+        x,y-0.07f,z+frame_w*0.5f,
+        x,y+frame_h-0.07f,z+frame_w*0.5f,
+        x,y+frame_h-0.07f,z-frame_w*0.5f,
+        TEX_METAL,
+        frame_color
+    );
+    draw_textured_quad(
+        x+facing_sign*0.026f,y,z-w*0.5f,
+        x+facing_sign*0.026f,y,z+w*0.5f,
+        x+facing_sign*0.026f,y+h,z+w*0.5f,
+        x+facing_sign*0.026f,y+h,z-w*0.5f,
+        TEX_GLASS,
+        glass_color
+    );
+}
+
 static void draw_building(const Building *b)
 {
     int material = (((int)(b->x + b->z)) & 1) ? TEX_BRICK : TEX_PLASTER;
+    unsigned int wall_color = gu_color_from_argb(b->wall);
+    unsigned int roof_color = gu_color_from_argb(b->roof);
     float front_z = b->z - b->d * 0.5f - 0.045f;
     float back_z = b->z + b->d * 0.5f + 0.045f;
     float window_h = b->h > 14.0f ? 2.2f : 1.8f;
     float window_y = b->h > 15.0f ? 4.2f : 3.6f;
     int rows = b->h > 15.0f ? 2 : 1;
     int cols = b->w > 19.0f ? 3 : 2;
+    int side_cols = b->d > 17.0f ? 2 : 1;
     int r;
     int c;
 
@@ -918,7 +1024,7 @@ static void draw_building(const Building *b)
         b->h,
         b->d,
         material,
-        b->wall
+        wall_color
     );
 
     draw_sloped_roof(
@@ -928,7 +1034,7 @@ static void draw_building(const Building *b)
         b->w * 1.08f,
         b->d * 1.08f,
         TEX_ROOF,
-        b->roof
+        roof_color
     );
 
     for (r = 0; r < rows; ++r)
@@ -946,23 +1052,30 @@ static void draw_building(const Building *b)
                     ? gu_color_rgba(255, 177, 116, 255)
                     : gu_color_rgba(124, 178, 203, 255);
 
-            draw_textured_quad(
-                wx-ww*0.5f,wy,front_z,
-                wx+ww*0.5f,wy,front_z,
-                wx+ww*0.5f,wy+window_h,front_z,
-                wx-ww*0.5f,wy+window_h,front_z,
-                TEX_GLASS,
-                glass_color
-            );
+            draw_window_z(wx, wy, front_z, ww, window_h, -1, glass_color);
+            draw_window_z(wx, wy, back_z, ww, window_h, 1, glass_color);
+        }
+    }
 
-            draw_textured_quad(
-                wx+ww*0.5f,wy,back_z,
-                wx-ww*0.5f,wy,back_z,
-                wx-ww*0.5f,wy+window_h,back_z,
-                wx+ww*0.5f,wy+window_h,back_z,
-                TEX_GLASS,
-                glass_color
-            );
+    /* Continue the window rhythm around the side walls, not only the front. */
+    for (r = 0; r < rows; ++r)
+    {
+        for (c = 0; c < side_cols; ++c)
+        {
+            float span = b->d * 0.62f;
+            float wz = b->z - span * 0.5f +
+                span * ((float)c + 0.5f) / (float)side_cols;
+            float wy = window_y + (float)r * 4.5f;
+            float ww = b->d * 0.17f;
+            float left_x = b->x - b->w * 0.5f - 0.045f;
+            float right_x = b->x + b->w * 0.5f + 0.045f;
+            unsigned int glass_color =
+                ((r + c + (int)b->z) % 4 == 0)
+                    ? gu_color_rgba(255, 177, 116, 255)
+                    : gu_color_rgba(124, 178, 203, 255);
+
+            draw_window_x(left_x, wy, wz, ww, window_h, -1, glass_color);
+            draw_window_x(right_x, wy, wz, ww, window_h, 1, glass_color);
         }
     }
 
@@ -986,6 +1099,33 @@ static void draw_building(const Building *b)
         TEX_METAL,
         0xffffffff
     );
+
+    /* Original striped shop awnings give the low-rise blocks more character. */
+    if (b->h <= 14.0f)
+    {
+        float awning_w = b->w * 0.56f;
+        int stripe;
+
+        for (stripe = 0; stripe < 6; ++stripe)
+        {
+            float x0 = b->x - awning_w * 0.5f +
+                awning_w * (float)stripe / 6.0f;
+            float x1 = b->x - awning_w * 0.5f +
+                awning_w * (float)(stripe + 1) / 6.0f;
+            unsigned int stripe_color = (stripe & 1)
+                ? gu_color_rgba(239, 214, 174, 255)
+                : gu_color_rgba(186, 75, 68, 255);
+
+            draw_textured_quad(
+                x0,3.18f,front_z-0.03f,
+                x1,3.18f,front_z-0.03f,
+                x1,2.90f,front_z-0.64f,
+                x0,2.90f,front_z-0.64f,
+                TEX_WOOD,
+                stripe_color
+            );
+        }
+    }
 
     if (b->h > 15.0f)
     {
@@ -1114,6 +1254,8 @@ static void draw_human_pose(
     float gait = sinf(phase) * 0.30f;
     float arm_gait = -gait * 0.72f;
 
+    shirt = gu_color_from_argb(shirt);
+
     draw_shadow_blob(x, z, 0.34f, 0.24f);
 
     pos.x = x;
@@ -1131,8 +1273,8 @@ static void draw_human_pose(
     pos.z = 0.0f;
     sceGumTranslate(&pos);
     sceGumRotateX(gait);
-    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, 0xff283044);
-    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, 0xff202226);
+    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, gu_color_from_argb(0xff283044));
+    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, gu_color_from_argb(0xff202226));
     sceGumPopMatrix();
 
     sceGumPushMatrix();
@@ -1141,13 +1283,21 @@ static void draw_human_pose(
     pos.z = 0.0f;
     sceGumTranslate(&pos);
     sceGumRotateX(-gait);
-    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, 0xff283044);
-    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, 0xff202226);
+    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, gu_color_from_argb(0xff283044));
+    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, gu_color_from_argb(0xff202226));
     sceGumPopMatrix();
 
-    /* Compact jacket and waist proportions read better from the chase view. */
-    draw_box_textured(0.0f, 0.82f, 0.0f, 0.37f, 0.22f, 0.24f, TEX_PLASTER, 0xff283044);
-    draw_box_textured(0.0f, 1.17f, 0.0f, 0.48f, 0.72f, 0.27f, TEX_PLASTER, shirt);
+    /* Rounded clothing forms keep people from reading as stacked boxes. */
+    draw_ellipsoid(
+        0.0f, 0.82f, 0.0f,
+        0.205f, 0.16f, 0.14f,
+        TEX_PLASTER, gu_color_from_argb(0xff283044)
+    );
+    draw_ellipsoid(
+        0.0f, 1.17f, 0.0f,
+        0.255f, 0.37f, 0.16f,
+        TEX_PLASTER, shirt
+    );
 
     /* Sleeves and hands swing opposite the legs. */
     sceGumPushMatrix();
@@ -1157,7 +1307,7 @@ static void draw_human_pose(
     sceGumTranslate(&pos);
     sceGumRotateX(arm_gait - 0.08f);
     draw_cylinder_y(0.0f, -0.38f, 0.0f, 0.075f, 0.40f, TEX_PLASTER, shirt);
-    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, 0xffb9825e);
+    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, gu_color_from_argb(0xffb9825e));
     sceGumPopMatrix();
 
     sceGumPushMatrix();
@@ -1167,13 +1317,17 @@ static void draw_human_pose(
     sceGumTranslate(&pos);
     sceGumRotateX(-arm_gait - 0.08f);
     draw_cylinder_y(0.0f, -0.38f, 0.0f, 0.075f, 0.40f, TEX_PLASTER, shirt);
-    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, 0xffb9825e);
+    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, gu_color_from_argb(0xffb9825e));
     sceGumPopMatrix();
 
-    draw_cylinder_y(0.0f, 1.51f, 0.0f, 0.075f, 0.12f, TEX_PLASTER, 0xffb9825e);
-    draw_uv_sphere(0.0f, 1.67f, 0.0f, 0.19f, TEX_PLASTER, 0xffc99372);
-    draw_uv_sphere(0.0f, 1.79f, 0.015f, 0.18f, TEX_WOOD, 0xff38291f);
-    draw_uv_sphere(0.0f, 1.65f, -0.17f, 0.045f, TEX_PLASTER, 0xffc99372);
+    draw_cylinder_y(0.0f, 1.51f, 0.0f, 0.075f, 0.12f, TEX_PLASTER, gu_color_from_argb(0xffb9825e));
+    draw_uv_sphere(0.0f, 1.67f, 0.0f, 0.19f, TEX_PLASTER, gu_color_from_argb(0xffc99372));
+    draw_ellipsoid(0.0f, 1.785f, 0.015f, 0.18f, 0.105f, 0.18f, TEX_WOOD, gu_color_from_argb(0xff38291f));
+    draw_uv_sphere(0.0f, 1.65f, -0.17f, 0.045f, TEX_PLASTER, gu_color_from_argb(0xffc99372));
+
+    /* Small facial marks make the head read at the PSP chase-camera scale. */
+    draw_uv_sphere(-0.052f, 1.69f, -0.171f, 0.020f, TEX_METAL, gu_color_from_argb(0xff292322));
+    draw_uv_sphere( 0.052f, 1.69f, -0.171f, 0.020f, TEX_METAL, gu_color_from_argb(0xff292322));
 
     sceGumPopMatrix();
 }
@@ -1198,29 +1352,245 @@ static void draw_child(
 )
 {
     ScePspFVector3 pos;
-    ScePspFVector3 scale;
 
     draw_shadow_blob(x, z, 0.36f, 0.25f);
 
-    draw_cylinder_y(x - 0.14f, y, z, 0.12f, 0.66f, TEX_METAL, 0xffd5d7dc);
-    draw_cylinder_y(x + 0.14f, y, z, 0.12f, 0.66f, TEX_METAL, 0xffd5d7dc);
+    shirt = gu_color_from_argb(shirt);
 
     pos.x = x;
-    pos.y = y + 0.67f;
+    pos.y = y;
     pos.z = z;
-    scale.x = 0.50f;
-    scale.y = 0.74f;
-    scale.z = 0.31f;
 
     sceGumPushMatrix();
     sceGumTranslate(&pos);
     sceGumRotateY(yaw);
-    sceGumScale(&scale);
-    draw_cylinder_y(0.0f,0.0f,0.0f,1.0f,1.05f,TEX_PLASTER,shirt);
-    sceGumPopMatrix();
 
-    draw_uv_sphere(x, y + 1.50f, z, 0.39f, TEX_PLASTER, 0xffe1b88e);
-    draw_uv_sphere(x, y + 1.74f, z, 0.40f, TEX_WOOD, 0xff5b4032);
+    draw_cylinder_y(-0.14f, 0.0f, 0.0f, 0.12f, 0.66f, TEX_METAL, gu_color_from_argb(0xffd5d7dc));
+    draw_cylinder_y( 0.14f, 0.0f, 0.0f, 0.12f, 0.66f, TEX_METAL, gu_color_from_argb(0xffd5d7dc));
+
+    draw_ellipsoid(0.0f, 0.99f, 0.0f, 0.25f, 0.34f, 0.18f, TEX_PLASTER, shirt);
+    draw_uv_sphere(0.0f, 1.50f, 0.0f, 0.28f, TEX_PLASTER, gu_color_from_argb(0xffe1b88e));
+    draw_ellipsoid(0.0f, 1.70f, 0.0f, 0.28f, 0.12f, 0.28f, TEX_WOOD, gu_color_from_argb(0xff5b4032));
+
+    sceGumPopMatrix();
+}
+
+typedef struct
+{
+    float x;
+    float y;
+} CarProfilePoint;
+
+static void set_car_vertex(
+    WorldVertex *v,
+    float u,
+    float tv,
+    unsigned int color,
+    float x,
+    float y,
+    float z
+)
+{
+    v->u = (unsigned short)u;
+    v->v = (unsigned short)tv;
+    v->color = color;
+    v->x = x;
+    v->y = y;
+    v->z = z;
+}
+
+/* A seven-point extruded body profile gives the car a low-poly silhouette. */
+static void draw_car_body_mesh(
+    float body_l,
+    float body_w,
+    float body_h,
+    unsigned int color
+)
+{
+    const int point_count = 7;
+    float base_y = 0.72f - body_h * 0.5f;
+    CarProfilePoint p[7];
+    WorldVertex *v;
+    int n = 0;
+    int side;
+    int i;
+
+    p[0].x = -body_l * 0.50f; p[0].y = base_y + body_h * 0.22f;
+    p[1].x = -body_l * 0.48f; p[1].y = base_y + body_h * 0.64f;
+    p[2].x = -body_l * 0.34f; p[2].y = base_y + body_h * 0.88f;
+    p[3].x =  body_l * 0.13f; p[3].y = base_y + body_h * 0.84f;
+    p[4].x =  body_l * 0.40f; p[4].y = base_y + body_h * 0.68f;
+    p[5].x =  body_l * 0.50f; p[5].y = base_y + body_h * 0.53f;
+    p[6].x =  body_l * 0.50f; p[6].y = base_y + body_h * 0.22f;
+
+    v = (WorldVertex *)sceGuGetMemory(
+        point_count * 12 * sizeof(WorldVertex)
+    );
+
+    for (side = 0; side < 2; ++side)
+    {
+        float z = side ? body_w * 0.5f : -body_w * 0.5f;
+        float cx = 0.0f;
+        float cy = base_y + body_h * 0.52f;
+        unsigned int face_color = shade_gu_color(color, side ? 94 : 82);
+
+        for (i = 0; i < point_count; ++i)
+        {
+            int next = (i + 1) % point_count;
+            float u0 = ((p[i].x / body_l) + 0.5f) * WORLD_TEX_W;
+            float u1 = ((p[next].x / body_l) + 0.5f) * WORLD_TEX_W;
+            float v0 = ((p[i].y - base_y) / body_h) * WORLD_TEX_H;
+            float v1 = ((p[next].y - base_y) / body_h) * WORLD_TEX_H;
+
+            set_car_vertex(&v[n++], WORLD_TEX_W * 0.5f, WORLD_TEX_H * 0.5f,
+                face_color, cx, cy, z);
+            set_car_vertex(&v[n++], u0, v0, face_color,
+                p[i].x, p[i].y, z);
+            set_car_vertex(&v[n++], u1, v1, face_color,
+                p[next].x, p[next].y, z);
+        }
+    }
+
+    /* Join both side profiles to form hood, bumpers, trunk and underside. */
+    for (i = 0; i < point_count; ++i)
+    {
+        int next = (i + 1) % point_count;
+        float u0 = ((p[i].x / body_l) + 0.5f) * WORLD_TEX_W;
+        float u1 = ((p[next].x / body_l) + 0.5f) * WORLD_TEX_W;
+        int percent = (p[i].y + p[next].y) >
+                      (2.0f * (base_y + body_h * 0.60f)) ? 108 : 80;
+        unsigned int face_color = shade_gu_color(color, percent);
+        float z0 = -body_w * 0.5f;
+        float z1 =  body_w * 0.5f;
+
+        set_car_vertex(&v[n++], u0, 0, face_color, p[i].x, p[i].y, z0);
+        set_car_vertex(&v[n++], u1, 0, face_color, p[next].x, p[next].y, z0);
+        set_car_vertex(&v[n++], u1, WORLD_TEX_H, face_color, p[next].x, p[next].y, z1);
+        set_car_vertex(&v[n++], u0, 0, face_color, p[i].x, p[i].y, z0);
+        set_car_vertex(&v[n++], u1, WORLD_TEX_H, face_color, p[next].x, p[next].y, z1);
+        set_car_vertex(&v[n++], u0, WORLD_TEX_H, face_color, p[i].x, p[i].y, z1);
+    }
+
+    draw_textured_triangles(v, n, TEX_CAR_BODY);
+}
+
+/* Tapered glass cabin with sloped windscreen and rear window. */
+static void draw_car_cabin(
+    float roof_l,
+    float body_w,
+    float roof_h,
+    unsigned int paint
+)
+{
+    float y0 = -roof_h * 0.5f;
+    float y1 =  roof_h * 0.5f;
+    float xb = roof_l * 0.50f;
+    float xt = roof_l * 0.31f;
+    float zb = body_w * 0.43f;
+    float zt = body_w * 0.34f;
+    float side;
+
+    draw_textured_quad(
+        -xt,y1,-zt, xt,y1,-zt, xt,y1,zt, -xt,y1,zt,
+        TEX_CAR_BODY,
+        shade_gu_color(paint, 112)
+    );
+
+    for (side = -1.0f; side <= 1.0f; side += 2.0f)
+    {
+        float z0 = side * zb;
+        float z1 = side * zt;
+
+        draw_textured_quad(
+            -xb,y0,z0, xb,y0,z0, xt,y1,z1, -xt,y1,z1,
+            TEX_GLASS,
+            gu_color_from_argb(0xff9fc8dc)
+        );
+        draw_textured_quad(
+            -0.025f,y0,z0, 0.025f,y0,z0,
+             0.025f,y1,z1, -0.025f,y1,z1,
+            TEX_CAR_BODY,
+            shade_gu_color(paint, 82)
+        );
+        draw_textured_quad(
+            -xb*0.88f,y0,z0, -xb*0.80f,y0,z0,
+            -xt*0.88f,y1,z1, -xt*0.98f,y1,z1,
+            TEX_CAR_BODY,
+            shade_gu_color(paint, 86)
+        );
+    }
+
+    /* Raked front windshield. */
+    draw_textured_quad(
+        xb,y0,-zb, xb,y0,zb, xt,y1,zt, xt,y1,-zt,
+        TEX_GLASS,
+        gu_color_from_argb(0xffbdd6e1)
+    );
+
+    /* Rear glass leans toward the trunk. */
+    draw_textured_quad(
+        -xb,y0,zb, -xb,y0,-zb, -xt,y1,-zt, -xt,y1,zt,
+        TEX_GLASS,
+        gu_color_from_argb(0xff829fb0)
+    );
+
+    /* Painted A-pillars on each side help define the window openings. */
+    for (side = -1.0f; side <= 1.0f; side += 2.0f)
+    {
+        float z0 = side * (zb + 0.012f);
+        float z1 = side * (zt + 0.012f);
+        float x0 = xb * 0.88f;
+        float x1 = xt * 0.90f;
+
+        draw_textured_quad(
+            x0 - 0.045f,y0,z0, x0 + 0.045f,y0,z0,
+            x1 + 0.035f,y1,z1, x1 - 0.035f,y1,z1,
+            TEX_CAR_BODY,
+            shade_gu_color(paint, 88)
+        );
+    }
+}
+
+static void draw_fender_arch(
+    float center_x,
+    float center_y,
+    float z,
+    float outer_radius,
+    float inner_radius,
+    unsigned int color
+)
+{
+    const int segments = 10;
+    int i;
+    WorldVertex *v = (WorldVertex *)sceGuGetMemory(
+        segments * 6 * sizeof(WorldVertex)
+    );
+
+    for (i = 0; i < segments; ++i)
+    {
+        float a0 = (float)i * PI_F / (float)segments;
+        float a1 = (float)(i + 1) * PI_F / (float)segments;
+        float x0o = center_x + cosf(a0) * outer_radius;
+        float y0o = center_y + sinf(a0) * outer_radius;
+        float x1o = center_x + cosf(a1) * outer_radius;
+        float y1o = center_y + sinf(a1) * outer_radius;
+        float x0i = center_x + cosf(a0) * inner_radius;
+        float y0i = center_y + sinf(a0) * inner_radius;
+        float x1i = center_x + cosf(a1) * inner_radius;
+        float y1i = center_y + sinf(a1) * inner_radius;
+        unsigned int lit = shade_gu_color(color, 104);
+        unsigned int shade = shade_gu_color(color, 84);
+        int n = i * 6;
+
+        set_car_vertex(&v[n+0], 0, 0, shade, x0o, y0o, z);
+        set_car_vertex(&v[n+1], WORLD_TEX_W, 0, shade, x1o, y1o, z);
+        set_car_vertex(&v[n+2], WORLD_TEX_W, WORLD_TEX_H, lit, x1i, y1i, z);
+        set_car_vertex(&v[n+3], 0, 0, shade, x0o, y0o, z);
+        set_car_vertex(&v[n+4], WORLD_TEX_W, WORLD_TEX_H, lit, x1i, y1i, z);
+        set_car_vertex(&v[n+5], 0, WORLD_TEX_H, lit, x0i, y0i, z);
+    }
+
+    draw_textured_triangles(v, segments * 6, TEX_CAR_BODY);
 }
 
 static void draw_car_model(
@@ -1240,6 +1610,8 @@ static void draw_car_model(
     float wheel_x = body_l * 0.31f;
     float wheel_z = body_w * 0.56f;
 
+    color = gu_color_from_argb(color);
+
     draw_shadow_blob(x, z, body_l * 0.50f, body_w * 0.56f);
 
     pos.x = x;
@@ -1251,82 +1623,58 @@ static void draw_car_model(
     /* The long body axis is local X; align it with the car's forward vector. */
     sceGumRotateY(PI_F * 0.5f - yaw);
 
-    draw_box_textured(
-        0.0f,
-        0.72f,
-        0.0f,
-        body_l,
-        body_h,
-        body_w,
-        TEX_CAR_BODY,
-        color
-    );
+    draw_car_body_mesh(body_l, body_w, body_h, color);
+
+    /* Fine door shut-lines and handles add scale cues to the body sides. */
+    {
+        float side_z;
+        int side;
+        for (side = -1; side <= 1; side += 2)
+        {
+            side_z = (float)side * (body_w * 0.5f + 0.022f);
+            draw_textured_quad(
+                -body_l*0.08f,0.54f,side_z,
+                -body_l*0.08f+0.035f,0.54f,side_z,
+                -body_l*0.08f+0.035f,0.97f,side_z,
+                -body_l*0.08f,0.97f,side_z,
+                TEX_METAL,
+                gu_color_rgba(49, 50, 48, 255)
+            );
+            draw_textured_quad(
+                body_l*0.04f,0.79f,side_z,
+                body_l*0.17f,0.79f,side_z,
+                body_l*0.17f,0.83f,side_z,
+                body_l*0.04f,0.83f,side_z,
+                TEX_METAL,
+                gu_color_rgba(205, 199, 181, 255)
+            );
+        }
+    }
 
     sceGumPushMatrix();
     pos.x = 0.0f;
     pos.y = 1.48f;
     pos.z = 0.0f;
     sceGumTranslate(&pos);
-
-    draw_box_textured(
-        0.0f,
-        0.0f,
-        0.0f,
-        roof_l,
-        roof_h,
-        body_w * 0.86f,
-        TEX_METAL,
-        0xffdfe4e8
-    );
-
-    draw_textured_quad(
-        -roof_l*0.42f,-roof_h*0.12f,-body_w*0.44f,
-         roof_l*0.42f,-roof_h*0.12f,-body_w*0.44f,
-         roof_l*0.34f, roof_h*0.40f,-body_w*0.44f,
-        -roof_l*0.34f, roof_h*0.40f,-body_w*0.44f,
-        TEX_GLASS,
-        0xffffffff
-    );
-
-    draw_textured_quad(
-         roof_l*0.42f,-roof_h*0.12f, body_w*0.44f,
-        -roof_l*0.42f,-roof_h*0.12f, body_w*0.44f,
-        -roof_l*0.34f, roof_h*0.40f, body_w*0.44f,
-         roof_l*0.34f, roof_h*0.40f, body_w*0.44f,
-        TEX_GLASS,
-        0xffffffff
-    );
-
-    /* Front and rear glass sit just outside the solid cabin faces. */
-    draw_textured_quad(
-        roof_l*0.5f+0.015f,-roof_h*0.44f,-body_w*0.36f,
-        roof_l*0.5f+0.015f,-roof_h*0.44f, body_w*0.36f,
-        roof_l*0.5f+0.015f, roof_h*0.44f, body_w*0.36f,
-        roof_l*0.5f+0.015f, roof_h*0.44f,-body_w*0.36f,
-        TEX_GLASS,
-        0xffd6e1e8
-    );
-
-    draw_textured_quad(
-        -roof_l*0.5f-0.015f,-roof_h*0.44f, body_w*0.36f,
-        -roof_l*0.5f-0.015f,-roof_h*0.44f,-body_w*0.36f,
-        -roof_l*0.5f-0.015f, roof_h*0.44f,-body_w*0.36f,
-        -roof_l*0.5f-0.015f, roof_h*0.44f, body_w*0.36f,
-        TEX_GLASS,
-        0xffc6d2dc
-    );
+    draw_car_cabin(roof_l, body_w, roof_h, color);
 
     sceGumPopMatrix();
 
     /* Four wheels and simple bright hub rings. */
-    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
-    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
-    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
-    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
+    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,gu_color_from_argb(0xff25282c));
+    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,gu_color_from_argb(0xff25282c));
+    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,gu_color_from_argb(0xff25282c));
+    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,gu_color_from_argb(0xff25282c));
+    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,gu_color_from_argb(0xffaeb5ba));
+    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,gu_color_from_argb(0xffaeb5ba));
+    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,gu_color_from_argb(0xffaeb5ba));
+    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,gu_color_from_argb(0xffaeb5ba));
+
+    /* Paint arcs over each tire opening to visually join wheels to the body. */
+    draw_fender_arch(-wheel_x,0.44f,-wheel_z-0.14f,0.47f,0.365f,color);
+    draw_fender_arch( wheel_x,0.44f,-wheel_z-0.14f,0.47f,0.365f,color);
+    draw_fender_arch(-wheel_x,0.44f, wheel_z+0.14f,0.47f,0.365f,color);
+    draw_fender_arch( wheel_x,0.44f, wheel_z+0.14f,0.47f,0.365f,color);
 
     /* Bumpers, grille, headlights and tail lamps. */
     draw_box_textured(
@@ -1337,7 +1685,7 @@ static void draw_car_model(
         0.20f,
         body_w*0.92f,
         TEX_METAL,
-        0xff8a9299
+        gu_color_from_argb(0xff8a9299)
     );
     draw_box_textured(
         -body_l*0.49f,
@@ -1347,7 +1695,7 @@ static void draw_car_model(
         0.20f,
         body_w*0.92f,
         TEX_METAL,
-        0xff8a9299
+        gu_color_from_argb(0xff8a9299)
     );
     draw_box_textured(
         body_l*0.485f,
@@ -1357,19 +1705,19 @@ static void draw_car_model(
         0.24f,
         body_w*0.28f,
         TEX_METAL,
-        0xff292d30
+        gu_color_from_argb(0xff292d30)
     );
-    draw_box_textured(body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,0xffffe6aa);
-    draw_box_textured(body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,0xffffe6aa);
-    draw_box_textured(-body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,0xffc6352f);
-    draw_box_textured(-body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,0xffc6352f);
+    draw_box_textured(body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,gu_color_from_argb(0xffffe6aa));
+    draw_box_textured(body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,gu_color_from_argb(0xffffe6aa));
+    draw_box_textured(-body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,gu_color_from_argb(0xffc6352f));
+    draw_box_textured(-body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,gu_color_from_argb(0xffc6352f));
 
     sceGumPopMatrix();
 }
 
 static void draw_bridge(void)
 {
-    draw_box_textured(0.0f,1.2f,-68.0f,26.0f,1.0f,8.0f,TEX_METAL,0xffb8bec5);
+    draw_box_textured(0.0f,1.2f,-68.0f,26.0f,1.0f,8.0f,TEX_METAL,gu_color_from_argb(0xffb8bec5));
 
     draw_textured_quad(
         -12.0f,1.72f,-71.6f,
@@ -1382,8 +1730,8 @@ static void draw_bridge(void)
 
     draw_box_textured(0.0f,2.7f,-72.0f,26.0f,1.2f,0.16f,TEX_METAL,0xffffffff);
     draw_box_textured(0.0f,2.7f,-64.0f,26.0f,1.2f,0.16f,TEX_METAL,0xffffffff);
-    draw_box_textured(-8.0f,-1.0f,-68.0f,1.4f,4.4f,1.6f,TEX_METAL,0xff9da2a7);
-    draw_box_textured( 8.0f,-1.0f,-68.0f,1.4f,4.4f,1.6f,TEX_METAL,0xff9da2a7);
+    draw_box_textured(-8.0f,-1.0f,-68.0f,1.4f,4.4f,1.6f,TEX_METAL,gu_color_from_argb(0xff9da2a7));
+    draw_box_textured( 8.0f,-1.0f,-68.0f,1.4f,4.4f,1.6f,TEX_METAL,gu_color_from_argb(0xff9da2a7));
 }
 
 static void draw_road_segment(
@@ -1474,7 +1822,7 @@ static void render_city_world(void)
          100.0f,-0.18f,-82.0f,
         -100.0f,-0.18f,-82.0f,
         TEX_GLASS,
-        0xff96cbe5
+        gu_color_from_argb(0xff96cbe5)
     );
 
     draw_textured_quad(
@@ -1483,7 +1831,7 @@ static void render_city_world(void)
          100.0f,0.01f,-78.0f,
         -100.0f,0.01f,-78.0f,
         TEX_SIDEWALK,
-        0xffe4d0a7
+        gu_color_from_argb(0xffe4d0a7)
     );
 
     for (i = 0; i < BUILDING_COUNT; ++i)
