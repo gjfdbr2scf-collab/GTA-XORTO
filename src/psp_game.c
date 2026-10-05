@@ -18,7 +18,7 @@
  *
  * Target presentation:
  * - 480x272 PSP framebuffer
- * - first-person 3D camera for gameplay
+ * - third-person 3D chase camera for gameplay
  * - peaceful city exploration
  * - classic early-2000s console / PS2-style realistic low-poly look
  *
@@ -194,6 +194,7 @@ static int current_vehicle = -1;
 static float player2_x = 4.0f;
 static float player2_z = 4.5f;
 static float player2_yaw = PI_F;
+static float player2_walk_phase = 0.0f;
 
 static int story_step = 0;
 
@@ -988,6 +989,83 @@ static void draw_tree(float x, float z, float scale_factor)
     );
 }
 
+static void draw_human_pose(
+    float x,
+    float y,
+    float z,
+    float yaw,
+    unsigned int shirt,
+    float phase
+)
+{
+    ScePspFVector3 pos;
+    float gait = sinf(phase) * 0.30f;
+    float arm_gait = -gait * 0.72f;
+
+    draw_shadow_blob(x, z, 0.34f, 0.24f);
+
+    pos.x = x;
+    pos.y = y;
+    pos.z = z;
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    sceGumRotateY(yaw);
+
+    /* Legs pivot at the hips so walking has a visible alternating stride. */
+    sceGumPushMatrix();
+    pos.x = -0.115f;
+    pos.y = 0.78f;
+    pos.z = 0.0f;
+    sceGumTranslate(&pos);
+    sceGumRotateX(gait);
+    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, 0xff283044);
+    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, 0xff202226);
+    sceGumPopMatrix();
+
+    sceGumPushMatrix();
+    pos.x = 0.115f;
+    pos.y = 0.78f;
+    pos.z = 0.0f;
+    sceGumTranslate(&pos);
+    sceGumRotateX(-gait);
+    draw_cylinder_y(0.0f, -0.76f, 0.0f, 0.085f, 0.76f, TEX_PLASTER, 0xff283044);
+    draw_box_textured(0.0f, -0.72f, -0.075f, 0.17f, 0.12f, 0.28f, TEX_METAL, 0xff202226);
+    sceGumPopMatrix();
+
+    /* Compact jacket and waist proportions read better from the chase view. */
+    draw_box_textured(0.0f, 0.82f, 0.0f, 0.37f, 0.22f, 0.24f, TEX_PLASTER, 0xff283044);
+    draw_box_textured(0.0f, 1.17f, 0.0f, 0.48f, 0.72f, 0.27f, TEX_PLASTER, shirt);
+
+    /* Sleeves and hands swing opposite the legs. */
+    sceGumPushMatrix();
+    pos.x = -0.285f;
+    pos.y = 1.46f;
+    pos.z = 0.0f;
+    sceGumTranslate(&pos);
+    sceGumRotateX(arm_gait - 0.08f);
+    draw_cylinder_y(0.0f, -0.38f, 0.0f, 0.075f, 0.40f, TEX_PLASTER, shirt);
+    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, 0xffb9825e);
+    sceGumPopMatrix();
+
+    sceGumPushMatrix();
+    pos.x = 0.285f;
+    pos.y = 1.46f;
+    pos.z = 0.0f;
+    sceGumTranslate(&pos);
+    sceGumRotateX(-arm_gait - 0.08f);
+    draw_cylinder_y(0.0f, -0.38f, 0.0f, 0.075f, 0.40f, TEX_PLASTER, shirt);
+    draw_cylinder_y(0.0f, -0.56f, 0.0f, 0.055f, 0.20f, TEX_PLASTER, 0xffb9825e);
+    sceGumPopMatrix();
+
+    draw_cylinder_y(0.0f, 1.51f, 0.0f, 0.075f, 0.12f, TEX_PLASTER, 0xffb9825e);
+    draw_uv_sphere(0.0f, 1.67f, 0.0f, 0.19f, TEX_PLASTER, 0xffc99372);
+    draw_uv_sphere(0.0f, 1.79f, 0.015f, 0.18f, TEX_WOOD, 0xff38291f);
+    draw_uv_sphere(0.0f, 1.65f, -0.17f, 0.045f, TEX_PLASTER, 0xffc99372);
+
+    sceGumPopMatrix();
+}
+
 static void draw_human(
     float x,
     float y,
@@ -996,40 +1074,7 @@ static void draw_human(
     unsigned int shirt
 )
 {
-    ScePspFVector3 pos;
-    ScePspFVector3 scale;
-
-    draw_shadow_blob(x, z, 0.48f, 0.32f);
-
-    draw_cylinder_y(x - 0.18f, y, z, 0.14f, 0.92f, TEX_METAL, 0xffd5d7dc);
-    draw_cylinder_y(x + 0.18f, y, z, 0.14f, 0.92f, TEX_METAL, 0xffd5d7dc);
-
-    pos.x = x;
-    pos.y = y + 0.98f;
-    pos.z = z;
-    scale.x = 0.56f;
-    scale.y = 0.88f;
-    scale.z = 0.38f;
-
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(yaw);
-    sceGumScale(&scale);
-    draw_cylinder_y(0.0f, 0.0f, 0.0f, 1.0f, 1.35f, TEX_PLASTER, shirt);
-    sceGumPopMatrix();
-
-    pos.x = x;
-    pos.y = y + 1.18f;
-    pos.z = z;
-    sceGumPushMatrix();
-    sceGumTranslate(&pos);
-    sceGumRotateY(yaw);
-    draw_cylinder_y(-0.60f, -0.52f, 0.0f, 0.12f, 1.00f, TEX_PLASTER, shirt);
-    draw_cylinder_y( 0.60f, -0.52f, 0.0f, 0.12f, 1.00f, TEX_PLASTER, shirt);
-    sceGumPopMatrix();
-
-    draw_uv_sphere(x, y + 2.13f, z, 0.43f, TEX_PLASTER, 0xffe1b88e);
-    draw_uv_sphere(x, y + 2.38f, z, 0.44f, TEX_WOOD, 0xff5b4032);
+    draw_human_pose(x, y, z, yaw, shirt, 0.0f);
 }
 
 static void draw_child(
@@ -1075,19 +1120,29 @@ static void draw_car_model(
 )
 {
     ScePspFVector3 pos;
-    ScePspFVector3 scale;
     float body_l = van_style ? 4.5f : 3.6f;
     float body_w = van_style ? 1.75f : 1.60f;
     float body_h = van_style ? 1.0f : 0.72f;
     float roof_l = van_style ? 2.85f : 2.12f;
     float roof_h = van_style ? 0.92f : 0.72f;
+    float wheel_x = body_l * 0.31f;
+    float wheel_z = body_w * 0.56f;
 
     draw_shadow_blob(x, z, body_l * 0.50f, body_w * 0.56f);
 
+    pos.x = x;
+    pos.y = 0.0f;
+    pos.z = z;
+
+    sceGumPushMatrix();
+    sceGumTranslate(&pos);
+    /* The long body axis is local X; align it with the car's forward vector. */
+    sceGumRotateY(PI_F * 0.5f - yaw);
+
     draw_box_textured(
-        x,
+        0.0f,
         0.72f,
-        z,
+        0.0f,
         body_l,
         body_h,
         body_w,
@@ -1095,16 +1150,11 @@ static void draw_car_model(
         color
     );
 
-    pos.x = x;
-    pos.y = 1.48f;
-    pos.z = z;
-    scale.x = 1.0f;
-    scale.y = 1.0f;
-    scale.z = 1.0f;
-
     sceGumPushMatrix();
+    pos.x = 0.0f;
+    pos.y = 1.48f;
+    pos.z = 0.0f;
     sceGumTranslate(&pos);
-    sceGumRotateY(yaw);
 
     draw_box_textured(
         0.0f,
@@ -1135,24 +1185,74 @@ static void draw_car_model(
         0xffffffff
     );
 
+    /* Front and rear glass sit just outside the solid cabin faces. */
+    draw_textured_quad(
+        roof_l*0.5f+0.015f,-roof_h*0.44f,-body_w*0.36f,
+        roof_l*0.5f+0.015f,-roof_h*0.44f, body_w*0.36f,
+        roof_l*0.5f+0.015f, roof_h*0.44f, body_w*0.36f,
+        roof_l*0.5f+0.015f, roof_h*0.44f,-body_w*0.36f,
+        TEX_GLASS,
+        0xffd6e1e8
+    );
+
+    draw_textured_quad(
+        -roof_l*0.5f-0.015f,-roof_h*0.44f, body_w*0.36f,
+        -roof_l*0.5f-0.015f,-roof_h*0.44f,-body_w*0.36f,
+        -roof_l*0.5f-0.015f, roof_h*0.44f,-body_w*0.36f,
+        -roof_l*0.5f-0.015f, roof_h*0.44f, body_w*0.36f,
+        TEX_GLASS,
+        0xffc6d2dc
+    );
+
     sceGumPopMatrix();
 
-    /* Four wheels. */
-    draw_cylinder_z(x - body_l*0.31f,0.44f,z - body_w*0.56f,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z(x + body_l*0.31f,0.44f,z - body_w*0.56f,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z(x - body_l*0.31f,0.44f,z + body_w*0.56f,0.39f,0.24f,TEX_METAL,0xff25282c);
-    draw_cylinder_z(x + body_l*0.31f,0.44f,z + body_w*0.56f,0.39f,0.24f,TEX_METAL,0xff25282c);
+    /* Four wheels and simple bright hub rings. */
+    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
+    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
+    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
+    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.39f,0.24f,TEX_METAL,0xff25282c);
+    draw_cylinder_z(-wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
+    draw_cylinder_z( wheel_x,0.44f,-wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
+    draw_cylinder_z(-wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
+    draw_cylinder_z( wheel_x,0.44f, wheel_z,0.17f,0.25f,TEX_METAL,0xffaeb5ba);
 
+    /* Bumpers, grille, headlights and tail lamps. */
     draw_box_textured(
-        x,
-        0.62f,
-        z - body_w*0.54f,
-        body_l*0.70f,
+        body_l*0.49f,
+        0.56f,
+        0.0f,
         0.14f,
-        0.10f,
+        0.20f,
+        body_w*0.92f,
         TEX_METAL,
-        0xffe9e9e9
+        0xff8a9299
     );
+    draw_box_textured(
+        -body_l*0.49f,
+        0.56f,
+        0.0f,
+        0.14f,
+        0.20f,
+        body_w*0.92f,
+        TEX_METAL,
+        0xff8a9299
+    );
+    draw_box_textured(
+        body_l*0.485f,
+        0.73f,
+        0.0f,
+        0.045f,
+        0.24f,
+        body_w*0.28f,
+        TEX_METAL,
+        0xff292d30
+    );
+    draw_box_textured(body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,0xffffe6aa);
+    draw_box_textured(body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.28f,TEX_METAL,0xffffe6aa);
+    draw_box_textured(-body_l*0.47f,0.82f,-body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,0xffc6352f);
+    draw_box_textured(-body_l*0.47f,0.82f, body_w*0.31f,0.08f,0.18f,0.25f,TEX_METAL,0xffc6352f);
+
+    sceGumPopMatrix();
 }
 
 static void draw_bridge(void)
@@ -1225,7 +1325,6 @@ static void render_city_world(void)
     int i;
 
     make_world_textures();
-    sceKernelDcacheWritebackAll();
 
     /* Continuous ground. */
     draw_textured_quad(
@@ -1302,12 +1401,13 @@ static void render_city_world(void)
         Pedestrian *p = &pedestrians[i];
         float walk = sinf(p->phase * 1.7f);
 
-        draw_human(
+        draw_human_pose(
             p->x,
             0.0f,
             p->z,
             walk * 0.18f,
-            p->shirt
+            p->shirt,
+            p->phase * 16.0f
         );
     }
 }
@@ -1970,11 +2070,13 @@ static void set_3d_camera(
     sceGumLoadIdentity();
 }
 
-static void set_first_person_camera(void)
+static void set_third_person_camera(void)
 {
     float fx;
     float fz;
+    float eye_x;
     float eye_y;
+    float eye_z;
 
     if (in_vehicle && current_vehicle >= 0)
     {
@@ -1983,14 +2085,13 @@ static void set_first_person_camera(void)
         fx = sinf(c->yaw);
         fz = -cosf(c->yaw);
 
-        /* Driver/passenger eye position, just ahead of the car center. */
         set_3d_camera(
-            c->x + fx * 0.18f,
-            1.48f,
-            c->z + fz * 0.18f,
-            c->x + fx * 8.0f,
-            1.42f,
-            c->z + fz * 8.0f
+            c->x - fx * 7.0f,
+            3.35f,
+            c->z - fz * 7.0f,
+            c->x + fx * 2.5f,
+            1.25f,
+            c->z + fz * 2.5f
         );
         return;
     }
@@ -1998,19 +2099,20 @@ static void set_first_person_camera(void)
     fx = sinf(player_yaw);
     fz = -cosf(player_yaw);
 
-    eye_y = 1.58f + sinf(walk_bob) * 0.018f;
+    eye_x = player_x - fx * 5.2f;
+    eye_y = 2.75f + sinf(walk_bob) * 0.025f;
+    eye_z = player_z - fz * 5.2f;
 
     set_3d_camera(
-        player_x,
+        eye_x,
         eye_y,
-        player_z,
-        player_x + fx * 8.0f,
-        eye_y + camera_pitch,
-        player_z + fz * 8.0f
+        eye_z,
+        player_x + fx * 0.65f,
+        1.25f + camera_pitch,
+        player_z + fz * 0.65f
     );
 }
-
-static void update_first_person_look(
+static void update_camera_turn_input(
     const SceCtrlData *pad
 )
 {
@@ -2900,7 +3002,7 @@ void psp_game_update(void)
 
         case GAME_STATE_STORY:
 
-            update_first_person_look(&pad);
+            update_camera_turn_input(&pad);
 
             if (in_vehicle)
                 update_car(&pad);
@@ -2969,7 +3071,7 @@ void psp_game_update(void)
 
         case GAME_STATE_FREE_WORLD:
 
-            update_first_person_look(&pad);
+            update_camera_turn_input(&pad);
 
             if (in_vehicle)
                 update_car(&pad);
@@ -3030,6 +3132,7 @@ void psp_game_update(void)
                 if (fabsf(lx) > 0.18f ||
                     fabsf(ly) > 0.18f)
                 {
+                    player_yaw = atan2f(lx, -ly);
                     player_x += lx * 0.17f;
                     player_z += ly * 0.17f;
 
@@ -3044,16 +3147,41 @@ void psp_game_update(void)
              * Player 2 = D-pad.
              */
             if (pad.Buttons & PSP_CTRL_LEFT)
+            {
                 player2_x -= 0.17f;
+                player2_yaw = -PI_F * 0.5f;
+            }
 
             if (pad.Buttons & PSP_CTRL_RIGHT)
+            {
                 player2_x += 0.17f;
+                player2_yaw = PI_F * 0.5f;
+            }
 
             if (pad.Buttons & PSP_CTRL_UP)
+            {
                 player2_z -= 0.17f;
+                player2_yaw = 0.0f;
+            }
 
             if (pad.Buttons & PSP_CTRL_DOWN)
+            {
                 player2_z += 0.17f;
+                player2_yaw = PI_F;
+            }
+
+            if (pad.Buttons &
+                (PSP_CTRL_LEFT | PSP_CTRL_RIGHT |
+                 PSP_CTRL_UP | PSP_CTRL_DOWN))
+            {
+                player2_walk_phase += 0.32f;
+                if (player2_walk_phase > 6.2831853f)
+                    player2_walk_phase -= 6.2831853f;
+            }
+            else
+            {
+                player2_walk_phase *= 0.90f;
+            }
 
             clamp_world_position(
                 &player2_x,
@@ -3549,11 +3677,15 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_first_person_camera();
+            set_third_person_camera();
 
             render_city_world();
 
-            /* The local player is represented by the first-person camera. */
+            if (!in_vehicle)
+            {
+                draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
+                draw_human_pose(brother_x, 0.0f, brother_z, brother_yaw, 0xff4c6078, walk_bob * 0.85f);
+            }
 
             /* Third cousin remains near the house after the intro. */
             draw_human(
@@ -3576,9 +3708,12 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_first_person_camera();
+            set_third_person_camera();
 
             render_city_world();
+
+            if (!in_vehicle)
+                draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
 
             render_game_hud(
                 "FREE OPEN WORLD"
@@ -3592,16 +3727,19 @@ void psp_game_render(void)
             sceGuDepthFunc(GU_GEQUAL);
             sceGuDepthMask(GU_TRUE);
 
-            set_first_person_camera();
+            set_third_person_camera();
 
             render_city_world();
 
-            draw_human(
+            draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
+
+            draw_human_pose(
                 player2_x,
                 0.0f,
                 player2_z,
                 player2_yaw,
-                0xff4f9a68
+                0xff4f9a68,
+                player2_walk_phase
             );
 
             render_game_hud(
