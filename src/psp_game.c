@@ -20,7 +20,7 @@
  * - 480x272 PSP framebuffer
  * - first-person 3D camera for gameplay
  * - peaceful city exploration
- * - classic early-2000s console / PS2-style low-poly look
+ * - classic early-2000s console / PS2-style realistic low-poly look
  *
  * Flow:
  * TITLE -> LANGUAGE -> SAVE -> SAVING -> FINISH SAVE -> MAIN MENU
@@ -509,6 +509,13 @@ static void make_world_textures(void)
         }
     }
 
+    /* The GE reads textures through DMA; make the CPU-written texture data
+     * visible before the first textured draw. */
+    sceKernelDcacheWritebackRange(
+        world_textures,
+        sizeof(world_textures)
+    );
+
     world_textures_ready = 1;
 }
 
@@ -786,13 +793,21 @@ static void draw_uv_sphere(
     }
 }
 
+typedef struct
+{
+    unsigned int color;
+    float x;
+    float y;
+    float z;
+} ShadowVertex;
+
 static void draw_shadow_blob(float x, float z, float sx, float sz)
 {
     const int sides = 8;
     int i;
-    WorldVertex *v =
-        (WorldVertex *)sceGuGetMemory(
-            sides * 3 * sizeof(WorldVertex)
+    ShadowVertex *v =
+        (ShadowVertex *)sceGuGetMemory(
+            sides * 3 * sizeof(ShadowVertex)
         );
 
     sceGuDisable(GU_TEXTURE_2D);
@@ -811,9 +826,9 @@ static void draw_shadow_blob(float x, float z, float sx, float sz)
         float a1 = ((float)(i + 1) / (float)sides) * 2.0f * PI_F;
         int n = i * 3;
 
-        v[n+0].u=0; v[n+0].v=0; v[n+0].color=0x60000000; v[n+0].x=x; v[n+0].y=0.02f; v[n+0].z=z;
-        v[n+1].u=0; v[n+1].v=0; v[n+1].color=0x60000000; v[n+1].x=x+cosf(a0)*sx; v[n+1].y=0.02f; v[n+1].z=z+sinf(a0)*sz;
-        v[n+2].u=0; v[n+2].v=0; v[n+2].color=0x60000000; v[n+2].x=x+cosf(a1)*sx; v[n+2].y=0.02f; v[n+2].z=z+sinf(a1)*sz;
+        v[n+0].color=0x60000000; v[n+0].x=x;                  v[n+0].y=0.02f; v[n+0].z=z;
+        v[n+1].color=0x60000000; v[n+1].x=x+cosf(a0)*sx;   v[n+1].y=0.02f; v[n+1].z=z+sinf(a0)*sz;
+        v[n+2].color=0x60000000; v[n+2].x=x+cosf(a1)*sx;   v[n+2].y=0.02f; v[n+2].z=z+sinf(a1)*sz;
     }
 
     sceGuDrawArray(
@@ -1210,6 +1225,7 @@ static void render_city_world(void)
     int i;
 
     make_world_textures();
+    sceKernelDcacheWritebackAll();
 
     /* Continuous ground. */
     draw_textured_quad(
@@ -1836,11 +1852,16 @@ static void update_transition(void)
 
             if (state == GAME_STATE_STORY_INTRO)
             {
+                music_stop();
                 intro_frame = 0;
                 intro_phase = 0;
                 intro_van_x = -42.0f;
                 intro_van_z = 8.0f;
                 cousin_door_open = 0;
+                intro_bro1_x = -13.0f;
+                intro_bro1_z = 5.2f;
+                intro_bro2_x = -13.0f;
+                intro_bro2_z = 10.0f;
             }
 
             transition_phase = 1;
@@ -3292,6 +3313,13 @@ void psp_game_render(void)
         list
     );
 
+    /* Start every frame from a known GU state. */
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_FOG);
+    sceGuDisable(GU_LIGHTING);
+
     /*
      * PSP GU depth setup for 3D.
      */
@@ -3308,7 +3336,7 @@ void psp_game_render(void)
     );
 
     sceGuClearColor(
-        0xff80b7d9
+        0xff9b7a66
     );
 
     sceGuClear(
@@ -3525,14 +3553,7 @@ void psp_game_render(void)
 
             render_city_world();
 
-            /* Local player is represented by the first-person camera. */
-            draw_human(
-                brother_x,
-                brother_y,
-                brother_z,
-                brother_yaw,
-                0xff7f8f5d
-            );
+            /* The local player is represented by the first-person camera. */
 
             /* Third cousin remains near the house after the intro. */
             draw_human(
