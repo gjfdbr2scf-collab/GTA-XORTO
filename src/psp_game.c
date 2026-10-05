@@ -329,8 +329,8 @@ typedef struct
     float z;
 } WorldVertex;
 
-#define WORLD_TEX_W 64
-#define WORLD_TEX_H 64
+#define WORLD_TEX_W 128
+#define WORLD_TEX_H 128
 #define WORLD_TEX_PIXELS (WORLD_TEX_W * WORLD_TEX_H)
 
 enum
@@ -353,6 +353,8 @@ static unsigned short __attribute__((aligned(64)))
     world_textures[TEX_COUNT][WORLD_TEX_PIXELS];
 
 static int world_textures_ready = 0;
+/* Reuse the GU texture setup while adjacent geometry uses the same material. */
+static int world_texture_bound = -1;
 
 static unsigned short rgb565_from_rgb(int r, int g, int b)
 {
@@ -370,6 +372,43 @@ static unsigned short rgb565_from_rgb(int r, int g, int b)
     );
 }
 
+/* sceGuColor uses 0xAABBGGRR byte order. */
+static unsigned int gu_color_rgba(int r, int g, int b, int a)
+{
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
+
+    return ((unsigned int)a << 24) |
+           ((unsigned int)b << 16) |
+           ((unsigned int)g << 8) |
+           (unsigned int)r;
+}
+
+static unsigned int shade_gu_color(unsigned int color, int percent)
+{
+    int r = (int)(color & 0xff);
+    int g = (int)((color >> 8) & 0xff);
+    int b = (int)((color >> 16) & 0xff);
+    unsigned int a = color & 0xff000000;
+
+    r = (r * percent) / 100;
+    g = (g * percent) / 100;
+    b = (b * percent) / 100;
+
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+
+    return a | ((unsigned int)b << 16) |
+           ((unsigned int)g << 8) | (unsigned int)r;
+}
+
 static void make_world_textures(void)
 {
     int x;
@@ -378,13 +417,20 @@ static void make_world_textures(void)
     if (world_textures_ready)
         return;
 
-    /* Asphalt aggregate. */
+    /* Fine asphalt aggregate with less obvious repeating noise. */
     for (y = 0; y < WORLD_TEX_H; ++y)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int n = (x * 17 + y * 31 + x * y * 3) & 15;
-            int c = 40 + n;
+            unsigned int noise =
+                (unsigned int)x * 374761393u ^
+                (unsigned int)y * 668265263u;
+            int n;
+            int c;
+
+            noise = (noise ^ (noise >> 13)) * 1274126177u;
+            n = (int)((noise >> 27) & 15u);
+            c = 34 + n;
             world_textures[TEX_ASPHALT][y * WORLD_TEX_W + x] =
                 rgb565_from_rgb(c, c + 1, c + 2);
         }
@@ -395,7 +441,7 @@ static void make_world_textures(void)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int joint = ((x & 15) == 0 || (y & 15) == 0);
+            int joint = ((x & 31) == 0 || (y & 31) == 0);
             int c = joint ? 108 : 151 + ((x + y) & 7);
             world_textures[TEX_SIDEWALK][y * WORLD_TEX_W + x] =
                 rgb565_from_rgb(c, c, c - 2);
@@ -418,9 +464,9 @@ static void make_world_textures(void)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int row = y / 8;
-            int offset = (row & 1) ? 6 : 0;
-            int mortar = (((x + offset) % 16) == 0) || ((y % 8) == 0);
+            int row = y / 16;
+            int offset = (row & 1) ? 12 : 0;
+            int mortar = (((x + offset) % 32) == 0) || ((y % 16) == 0);
             int n = (x * 5 + y * 9) & 7;
 
             world_textures[TEX_BRICK][y * WORLD_TEX_W + x] = mortar
@@ -445,8 +491,8 @@ static void make_world_textures(void)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int shingle = ((x + ((y / 8) & 1) * 6) % 12) < 1;
-            int line = (y % 8) == 0;
+            int shingle = ((x + ((y / 16) & 1) * 10) % 24) < 2;
+            int line = (y % 16) == 0;
             int c = (shingle || line) ? 67 : 94 + ((x + y) & 9);
             world_textures[TEX_ROOF][y * WORLD_TEX_W + x] =
                 rgb565_from_rgb(c + 20, c + 4, c + 2);
@@ -458,7 +504,7 @@ static void make_world_textures(void)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int frame = ((x % 16) <= 1 || (y % 16) <= 1);
+            int frame = ((x % 32) <= 2 || (y % 32) <= 2);
             int c = frame ? 55 : 82 + ((x * 3 + y) & 15);
             world_textures[TEX_GLASS][y * WORLD_TEX_W + x] =
                 rgb565_from_rgb(45, c, 95 + ((x + y) & 15));
@@ -470,7 +516,7 @@ static void make_world_textures(void)
     {
         for (x = 0; x < WORLD_TEX_W; ++x)
         {
-            int stripe = (x + y * 3) & 15;
+            int stripe = (x + y * 3) & 31;
             world_textures[TEX_WOOD][y * WORLD_TEX_W + x] =
                 rgb565_from_rgb(95 + stripe * 2, 59 + stripe, 37);
         }
@@ -525,6 +571,12 @@ static void bind_world_texture(int texture_id)
     if (texture_id < 0 || texture_id >= TEX_COUNT)
         texture_id = TEX_PLASTER;
 
+    if (texture_id == world_texture_bound)
+    {
+        sceGuEnable(GU_TEXTURE_2D);
+        return;
+    }
+
     sceGuTexMode(
         GU_PSM_5650,
         0,
@@ -553,6 +605,8 @@ static void bind_world_texture(int texture_id)
     sceGuEnable(
         GU_TEXTURE_2D
     );
+
+    world_texture_bound = texture_id;
 }
 
 static void draw_textured_triangles(
@@ -574,7 +628,6 @@ static void draw_textured_triangles(
         vertices
     );
 
-    sceGuDisable(GU_TEXTURE_2D);
 }
 
 static void draw_textured_quad(
@@ -623,12 +676,12 @@ static void draw_box_textured(
     float z0 = z - sz * 0.5f;
     float z1 = z + sz * 0.5f;
 
-    draw_textured_quad(x0,y0,z0, x1,y0,z0, x1,y1,z0, x0,y1,z0, texture_id,color);
-    draw_textured_quad(x1,y0,z1, x0,y0,z1, x0,y1,z1, x1,y1,z1, texture_id,color);
-    draw_textured_quad(x0,y0,z1, x0,y0,z0, x0,y1,z0, x0,y1,z1, texture_id,color);
-    draw_textured_quad(x1,y0,z0, x1,y0,z1, x1,y1,z1, x1,y1,z0, texture_id,color);
-    draw_textured_quad(x0,y1,z0, x1,y1,z0, x1,y1,z1, x0,y1,z1, texture_id,color);
-    draw_textured_quad(x0,y0,z1, x1,y0,z1, x1,y0,z0, x0,y0,z0, texture_id,color);
+    draw_textured_quad(x0,y0,z0, x1,y0,z0, x1,y1,z0, x0,y1,z0, texture_id,shade_gu_color(color,92));
+    draw_textured_quad(x1,y0,z1, x0,y0,z1, x0,y1,z1, x1,y1,z1, texture_id,shade_gu_color(color,82));
+    draw_textured_quad(x0,y0,z1, x0,y0,z0, x0,y1,z0, x0,y1,z1, texture_id,shade_gu_color(color,88));
+    draw_textured_quad(x1,y0,z0, x1,y0,z1, x1,y1,z1, x1,y1,z0, texture_id,shade_gu_color(color,76));
+    draw_textured_quad(x0,y1,z0, x1,y1,z0, x1,y1,z1, x0,y1,z1, texture_id,shade_gu_color(color,112));
+    draw_textured_quad(x0,y0,z1, x1,y0,z1, x1,y0,z0, x0,y0,z0, texture_id,shade_gu_color(color,70));
 }
 
 static void draw_sloped_roof(
@@ -865,7 +918,7 @@ static void draw_building(const Building *b)
         b->h,
         b->d,
         material,
-        0xffffffff
+        b->wall
     );
 
     draw_sloped_roof(
@@ -875,7 +928,7 @@ static void draw_building(const Building *b)
         b->w * 1.08f,
         b->d * 1.08f,
         TEX_ROOF,
-        0xffffffff
+        b->roof
     );
 
     for (r = 0; r < rows; ++r)
@@ -888,6 +941,10 @@ static void draw_building(const Building *b)
                 span * ((float)c + 0.5f) / (float)cols;
             float wy = window_y + (float)r * 4.5f;
             float ww = b->w * 0.14f;
+            unsigned int glass_color =
+                ((r + c + (int)b->x) % 4 == 0)
+                    ? gu_color_rgba(255, 177, 116, 255)
+                    : gu_color_rgba(124, 178, 203, 255);
 
             draw_textured_quad(
                 wx-ww*0.5f,wy,front_z,
@@ -895,7 +952,7 @@ static void draw_building(const Building *b)
                 wx+ww*0.5f,wy+window_h,front_z,
                 wx-ww*0.5f,wy+window_h,front_z,
                 TEX_GLASS,
-                0xffffffff
+                glass_color
             );
 
             draw_textured_quad(
@@ -904,7 +961,7 @@ static void draw_building(const Building *b)
                 wx-ww*0.5f,wy+window_h,back_z,
                 wx+ww*0.5f,wy+window_h,back_z,
                 TEX_GLASS,
-                0xffffffff
+                glass_color
             );
         }
     }
@@ -916,7 +973,7 @@ static void draw_building(const Building *b)
         b->x+b->w*0.10f,b->h*0.38f,front_z,
         b->x-b->w*0.10f,b->h*0.38f,front_z,
         TEX_WOOD,
-        0xffffffff
+        gu_color_rgba(151, 94, 54, 255)
     );
 
     draw_box_textured(
@@ -945,48 +1002,103 @@ static void draw_building(const Building *b)
     }
 }
 
-static void draw_tree(float x, float z, float scale_factor)
+static void draw_palm_frond(
+    float x,
+    float y,
+    float z,
+    float angle,
+    float length,
+    float width,
+    unsigned int color
+)
 {
-    float trunk_h = 2.6f * scale_factor;
-
-    draw_shadow_blob(x, z, 1.0f * scale_factor, 0.75f * scale_factor);
-
-    draw_cylinder_y(
-        x,
-        0.0f,
-        z,
-        0.28f * scale_factor,
-        trunk_h,
-        TEX_WOOD,
-        0xffffffff
+    const int segments = 5;
+    int i;
+    float dx = cosf(angle);
+    float dz = sinf(angle);
+    float sx = -dz;
+    float sz = dx;
+    WorldVertex *v = (WorldVertex *)sceGuGetMemory(
+        segments * 6 * sizeof(WorldVertex)
     );
 
-    draw_uv_sphere(
-        x,
-        trunk_h + 0.9f * scale_factor,
-        z,
-        1.75f * scale_factor,
-        TEX_GRASS,
-        0xffffffff
-    );
+    for (i = 0; i < segments; ++i)
+    {
+        float t0 = (float)i / (float)segments;
+        float t1 = (float)(i + 1) / (float)segments;
+        float w0 = width * (1.0f - t0 * 0.82f);
+        float w1 = width * (1.0f - t1 * 0.82f);
+        float x0 = x + dx * length * t0;
+        float z0 = z + dz * length * t0;
+        float x1 = x + dx * length * t1;
+        float z1 = z + dz * length * t1;
+        float y0 = y + sinf(t0 * PI_F) * 0.20f - t0 * t0 * 0.48f;
+        float y1 = y + sinf(t1 * PI_F) * 0.20f - t1 * t1 * 0.48f;
+        unsigned int c0 = shade_gu_color(color, 100 - i * 3);
+        unsigned int c1 = shade_gu_color(color, 94 - i * 3);
+        int n = i * 6;
 
-    draw_uv_sphere(
-        x - 0.82f * scale_factor,
-        trunk_h + 1.20f * scale_factor,
-        z + 0.12f * scale_factor,
-        1.18f * scale_factor,
-        TEX_GRASS,
-        0xffffffff
-    );
+        v[n+0].u=0;             v[n+0].v=0;                v[n+0].color=c0;
+        v[n+0].x=x0+sx*w0;      v[n+0].y=y0;               v[n+0].z=z0+sz*w0;
+        v[n+1].u=WORLD_TEX_W;   v[n+1].v=0;                v[n+1].color=c0;
+        v[n+1].x=x0-sx*w0;      v[n+1].y=y0;               v[n+1].z=z0-sz*w0;
+        v[n+2].u=WORLD_TEX_W;   v[n+2].v=WORLD_TEX_H;      v[n+2].color=c1;
+        v[n+2].x=x1-sx*w1;      v[n+2].y=y1;               v[n+2].z=z1-sz*w1;
+        v[n+3]=v[n+0];
+        v[n+4]=v[n+2];
+        v[n+5].u=0;             v[n+5].v=WORLD_TEX_H;      v[n+5].color=c1;
+        v[n+5].x=x1+sx*w1;      v[n+5].y=y1;               v[n+5].z=z1+sz*w1;
+    }
 
-    draw_uv_sphere(
-        x + 0.82f * scale_factor,
-        trunk_h + 1.10f * scale_factor,
-        z - 0.22f * scale_factor,
-        1.20f * scale_factor,
-        TEX_GRASS,
-        0xffffffff
-    );
+    draw_textured_triangles(v, segments * 6, TEX_GRASS);
+}
+
+static void draw_palm_tree(float x, float z, float scale_factor)
+{
+    const int trunk_segments = 4;
+    const int frond_count = 8;
+    float trunk_h = 4.6f * scale_factor;
+    float lean_x = 0.52f * scale_factor;
+    float lean_z = 0.18f * scale_factor;
+    float crown_x = x + lean_x;
+    float crown_z = z + lean_z;
+    int i;
+
+    draw_shadow_blob(x, z, 1.05f * scale_factor, 0.80f * scale_factor);
+
+    for (i = 0; i < trunk_segments; ++i)
+    {
+        float t = (float)i / (float)trunk_segments;
+        float cx = x + lean_x * (t + 0.125f);
+        float cz = z + lean_z * (t + 0.125f);
+        float radius = 0.22f * scale_factor * (1.0f - t * 0.24f);
+
+        draw_cylinder_y(
+            cx,
+            trunk_h * t,
+            cz,
+            radius,
+            trunk_h / (float)trunk_segments + 0.04f,
+            TEX_WOOD,
+            gu_color_rgba(150, 107, 64, 255)
+        );
+    }
+
+    for (i = 0; i < frond_count; ++i)
+    {
+        float angle = (2.0f * PI_F * (float)i) / (float)frond_count;
+        float length = (2.7f + (float)(i & 1) * 0.35f) * scale_factor;
+
+        draw_palm_frond(
+            crown_x,
+            trunk_h,
+            crown_z,
+            angle,
+            length,
+            0.42f * scale_factor,
+            gu_color_rgba(59 + (i & 1) * 8, 113 + (i & 1) * 10, 55, 255)
+        );
+    }
 }
 
 static void draw_human_pose(
@@ -1324,6 +1436,11 @@ static void render_city_world(void)
 {
     int i;
 
+    /* Fog hides the far edge; don't spend GE time drawing beyond it. */
+#define CAMERA_NEAR(xp, zp, limit) \
+    (((xp) - camera_eye.x) * ((xp) - camera_eye.x) + \
+     ((zp) - camera_eye.z) * ((zp) - camera_eye.z) <= (limit) * (limit))
+
     make_world_textures();
 
     /* Continuous ground. */
@@ -1370,20 +1487,24 @@ static void render_city_world(void)
     );
 
     for (i = 0; i < BUILDING_COUNT; ++i)
-        draw_building(&buildings[i]);
+        if (CAMERA_NEAR(buildings[i].x, buildings[i].z, 165.0f))
+            draw_building(&buildings[i]);
 
     /* Parks and roadside greenery. */
-    draw_tree(-62.0f,-60.0f,1.15f);
-    draw_tree( 28.0f,-60.0f,1.10f);
-    draw_tree(-62.0f, 60.0f,0.95f);
-    draw_tree( 28.0f, 60.0f,0.90f);
-    draw_tree(-66.0f,8.0f,0.85f);
-    draw_tree(60.0f,-4.0f,0.95f);
+    if (CAMERA_NEAR(-62.0f,-60.0f,135.0f)) draw_palm_tree(-62.0f,-60.0f,1.15f);
+    if (CAMERA_NEAR( 28.0f,-60.0f,135.0f)) draw_palm_tree( 28.0f,-60.0f,1.10f);
+    if (CAMERA_NEAR(-62.0f, 60.0f,135.0f)) draw_palm_tree(-62.0f, 60.0f,0.95f);
+    if (CAMERA_NEAR( 28.0f, 60.0f,135.0f)) draw_palm_tree( 28.0f, 60.0f,0.90f);
+    if (CAMERA_NEAR(-66.0f,  8.0f,135.0f)) draw_palm_tree(-66.0f,  8.0f,0.85f);
+    if (CAMERA_NEAR( 60.0f, -4.0f,135.0f)) draw_palm_tree( 60.0f, -4.0f,0.95f);
 
     draw_bridge();
 
     for (i = 0; i < CAR_COUNT; ++i)
     {
+        if (!CAMERA_NEAR(cars[i].x, cars[i].z, 135.0f))
+            continue;
+
         if (i == STORY_VAN_INDEX && state == GAME_STATE_STORY_INTRO)
             continue;
 
@@ -1401,6 +1522,9 @@ static void render_city_world(void)
         Pedestrian *p = &pedestrians[i];
         float walk = sinf(p->phase * 1.7f);
 
+        if (!CAMERA_NEAR(p->x, p->z, 110.0f))
+            continue;
+
         draw_human_pose(
             p->x,
             0.0f,
@@ -1410,6 +1534,8 @@ static void render_city_world(void)
             p->phase * 16.0f
         );
     }
+
+#undef CAMERA_NEAR
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2141,6 +2267,18 @@ static void update_story_intro(void)
     ++intro_frame;
 
     if (intro_frame < INTRO_PHASE_APPROACH)
+        intro_phase = 0;
+    else if (intro_frame < INTRO_PHASE_APPROACH + INTRO_PHASE_PARK)
+        intro_phase = 1;
+    else if (intro_frame < INTRO_PHASE_APPROACH + INTRO_PHASE_PARK + INTRO_PHASE_EXIT)
+        intro_phase = 2;
+    else if (intro_frame < INTRO_PHASE_APPROACH + INTRO_PHASE_PARK +
+                          INTRO_PHASE_EXIT + INTRO_PHASE_WALK)
+        intro_phase = 3;
+    else
+        intro_phase = 4;
+
+    if (intro_frame < INTRO_PHASE_APPROACH)
     {
         float t =
             (float)intro_frame /
@@ -2587,8 +2725,12 @@ static void gu_init(void)
 static void begin_2d(void)
 {
     /* Reset common 3D state before drawing UI. */
+    /* 2D assets can replace the active GU texture outside the world cache. */
+    world_texture_bound = -1;
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_FOG);
 
     sceGumMatrixMode(
         GU_PROJECTION
@@ -2616,6 +2758,77 @@ static void begin_2d(void)
     );
 
     sceGumLoadIdentity();
+}
+
+static int lerp_channel(int a, int b, int t)
+{
+    return a + ((b - a) * t) / 255;
+}
+
+static void render_sunset_sky(void)
+{
+    const int bands = 34;
+    int i;
+
+    /* A PSP-era violet-to-coral dusk gradient, drawn before the 3D world. */
+    begin_2d();
+
+    for (i = 0; i < bands; ++i)
+    {
+        int y0 = (SCREEN_HEIGHT * i) / bands;
+        int y1 = (SCREEN_HEIGHT * (i + 1)) / bands;
+        int r0, g0, b0, r1, g1, b1;
+        int r, g, b;
+        int t = (i * 255) / (bands - 1);
+
+        if (t < 160)
+        {
+            int local = (t * 255) / 160;
+            r0 = 23;  g0 = 28;  b0 = 79;
+            r1 = 93;  g1 = 91;  b1 = 151;
+            r = lerp_channel(r0, r1, local);
+            g = lerp_channel(g0, g1, local);
+            b = lerp_channel(b0, b1, local);
+        }
+        else if (t < 220)
+        {
+            int local = ((t - 160) * 255) / 60;
+            r0 = 93;  g0 = 91;  b0 = 151;
+            r1 = 255; g1 = 157; b1 = 111;
+            r = lerp_channel(r0, r1, local);
+            g = lerp_channel(g0, g1, local);
+            b = lerp_channel(b0, b1, local);
+        }
+        else
+        {
+            int local = ((t - 220) * 255) / 35;
+            if (local > 255) local = 255;
+            r0 = 255; g0 = 157; b0 = 111;
+            r1 = 147; g1 = 66;  b1 = 112;
+            r = lerp_channel(r0, r1, local);
+            g = lerp_channel(g0, g1, local);
+            b = lerp_channel(b0, b1, local);
+        }
+
+        draw_rect_2d(
+            0,
+            y0,
+            SCREEN_WIDTH,
+            y1 - y0,
+            gu_color_rgba(r, g, b, 255)
+        );
+    }
+
+    /* The PSP depth buffer is reversed; retain GEQUAL and allow Z writes. */
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthFunc(GU_GEQUAL);
+    sceGuDepthMask(GU_FALSE);
+    sceGuFog(
+        32.0f,
+        145.0f,
+        gu_color_rgba(206, 126, 143, 255)
+    );
+    sceGuEnable(GU_FOG);
 }
 
 static void render_game_hud(
@@ -2729,6 +2942,7 @@ static void render_game_hud(
 int psp_game_init(void)
 {
     /* Leave the PSP clock at the system/emulator default. */
+    world_texture_bound = -1;
     sceCtrlSetSamplingCycle(0);
 
     sceCtrlSetSamplingMode(
@@ -3464,7 +3678,7 @@ void psp_game_render(void)
     );
 
     sceGuClearColor(
-        0xff9b7a66
+        gu_color_rgba(23, 28, 79, 255)
     );
 
     sceGuClear(
@@ -3666,7 +3880,10 @@ void psp_game_render(void)
 
             sceGuEnable(GU_DEPTH_TEST);
             sceGuDepthFunc(GU_GEQUAL);
-            sceGuDepthMask(GU_TRUE);
+            /* GU_TRUE masks (disables) depth writes; 3D needs them enabled. */
+            sceGuDepthMask(GU_FALSE);
+
+            render_sunset_sky();
 
             render_story_intro();
             break;
@@ -3675,7 +3892,9 @@ void psp_game_render(void)
 
             sceGuEnable(GU_DEPTH_TEST);
             sceGuDepthFunc(GU_GEQUAL);
-            sceGuDepthMask(GU_TRUE);
+            sceGuDepthMask(GU_FALSE);
+
+            render_sunset_sky();
 
             set_third_person_camera();
 
@@ -3706,7 +3925,9 @@ void psp_game_render(void)
 
             sceGuEnable(GU_DEPTH_TEST);
             sceGuDepthFunc(GU_GEQUAL);
-            sceGuDepthMask(GU_TRUE);
+            sceGuDepthMask(GU_FALSE);
+
+            render_sunset_sky();
 
             set_third_person_camera();
 
@@ -3725,7 +3946,9 @@ void psp_game_render(void)
 
             sceGuEnable(GU_DEPTH_TEST);
             sceGuDepthFunc(GU_GEQUAL);
-            sceGuDepthMask(GU_TRUE);
+            sceGuDepthMask(GU_FALSE);
+
+            render_sunset_sky();
 
             set_third_person_camera();
 
