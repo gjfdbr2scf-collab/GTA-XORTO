@@ -9,12 +9,13 @@
 #include <pspvaudio.h>
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "psp_game.h"
 
 /*
- * GINSENG STRIP 2002
+ * GINSENG STRIP GTA
  *
  * Target presentation:
  * - 480x272 PSP framebuffer
@@ -37,8 +38,7 @@
  * -> player takes control -> walk together through Peine -> bridge
  *
  * Music:
- * title/language/save/intro = OFF
- * main menu/playable states = ON
+ * plays only while the player is inside and driving a vehicle
  */
 
 extern const unsigned char Title_start[];
@@ -96,10 +96,9 @@ typedef enum
 /* Global state                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* 1 MiB GU command list: the textured city uses substantially more
- * per-frame vertex memory than the original small primitive renderer. */
+/* Two MiB leaves headroom for the PSP GE list and generated scene vertices. */
 static unsigned int __attribute__((aligned(64)))
-    list[0x100000 / 4];
+    list[0x200000 / 4];
 
 static GameState state = GAME_STATE_TITLE;
 static int game_initialized = 0;
@@ -107,6 +106,12 @@ static int game_initialized = 0;
 static int selected_language = 0;
 static int selected_menu = 0;
 static int settings_selection = 0;
+static int brightness_percent = 100;
+static int graphics_quality = 0; /* 0 = performance, 1 = quality */
+
+/* One in-game minute passes per real second: a full day lasts 24 minutes. */
+static float world_time_minutes = 17.0f * 60.0f;
+static unsigned int world_clock_ticks = 0;
 
 static unsigned int old_buttons = 0;
 
@@ -1783,6 +1788,10 @@ static void draw_road_segment(
 static void render_city_world(void)
 {
     int i;
+    float building_view = graphics_quality ? 165.0f : 112.0f;
+    float tree_view = graphics_quality ? 135.0f : 88.0f;
+    float vehicle_view = graphics_quality ? 135.0f : 92.0f;
+    float pedestrian_view = graphics_quality ? 110.0f : 72.0f;
 
     /* Fog hides the far edge; don't spend GE time drawing beyond it. */
 #define CAMERA_NEAR(xp, zp, limit) \
@@ -1835,22 +1844,22 @@ static void render_city_world(void)
     );
 
     for (i = 0; i < BUILDING_COUNT; ++i)
-        if (CAMERA_NEAR(buildings[i].x, buildings[i].z, 165.0f))
+        if (CAMERA_NEAR(buildings[i].x, buildings[i].z, building_view))
             draw_building(&buildings[i]);
 
     /* Parks and roadside greenery. */
-    if (CAMERA_NEAR(-62.0f,-60.0f,135.0f)) draw_palm_tree(-62.0f,-60.0f,1.15f);
-    if (CAMERA_NEAR( 28.0f,-60.0f,135.0f)) draw_palm_tree( 28.0f,-60.0f,1.10f);
-    if (CAMERA_NEAR(-62.0f, 60.0f,135.0f)) draw_palm_tree(-62.0f, 60.0f,0.95f);
-    if (CAMERA_NEAR( 28.0f, 60.0f,135.0f)) draw_palm_tree( 28.0f, 60.0f,0.90f);
-    if (CAMERA_NEAR(-66.0f,  8.0f,135.0f)) draw_palm_tree(-66.0f,  8.0f,0.85f);
-    if (CAMERA_NEAR( 60.0f, -4.0f,135.0f)) draw_palm_tree( 60.0f, -4.0f,0.95f);
+    if (CAMERA_NEAR(-62.0f,-60.0f,tree_view)) draw_palm_tree(-62.0f,-60.0f,1.15f);
+    if (CAMERA_NEAR( 28.0f,-60.0f,tree_view)) draw_palm_tree( 28.0f,-60.0f,1.10f);
+    if (CAMERA_NEAR(-62.0f, 60.0f,tree_view)) draw_palm_tree(-62.0f, 60.0f,0.95f);
+    if (CAMERA_NEAR( 28.0f, 60.0f,tree_view)) draw_palm_tree( 28.0f, 60.0f,0.90f);
+    if (CAMERA_NEAR(-66.0f,  8.0f,tree_view)) draw_palm_tree(-66.0f,  8.0f,0.85f);
+    if (CAMERA_NEAR( 60.0f, -4.0f,tree_view)) draw_palm_tree( 60.0f, -4.0f,0.95f);
 
     draw_bridge();
 
     for (i = 0; i < CAR_COUNT; ++i)
     {
-        if (!CAMERA_NEAR(cars[i].x, cars[i].z, 135.0f))
+        if (!CAMERA_NEAR(cars[i].x, cars[i].z, vehicle_view))
             continue;
 
         if (i == STORY_VAN_INDEX && state == GAME_STATE_STORY_INTRO)
@@ -1870,7 +1879,7 @@ static void render_city_world(void)
         Pedestrian *p = &pedestrians[i];
         float walk = sinf(p->phase * 1.7f);
 
-        if (!CAMERA_NEAR(p->x, p->z, 110.0f))
+        if (!CAMERA_NEAR(p->x, p->z, pedestrian_view))
             continue;
 
         draw_human_pose(
@@ -1899,18 +1908,27 @@ static const unsigned char glyph_F[7] = {31,16,16,30,16,16,16};
 static const unsigned char glyph_G[7] = {14,17,16,23,17,17,14};
 static const unsigned char glyph_H[7] = {17,17,17,31,17,17,17};
 static const unsigned char glyph_I[7] = {31,4,4,4,4,4,31};
+static const unsigned char glyph_J[7] = {7,2,2,2,2,18,12};
+static const unsigned char glyph_K[7] = {17,18,20,24,20,18,17};
 static const unsigned char glyph_L[7] = {16,16,16,16,16,16,31};
 static const unsigned char glyph_M[7] = {17,27,21,21,17,17,17};
 static const unsigned char glyph_N[7] = {17,25,21,19,17,17,17};
 static const unsigned char glyph_O[7] = {14,17,17,17,17,17,14};
 static const unsigned char glyph_P[7] = {30,17,17,30,16,16,16};
+static const unsigned char glyph_Q[7] = {14,17,17,17,21,18,13};
 static const unsigned char glyph_R[7] = {30,17,17,30,20,18,17};
 static const unsigned char glyph_S[7] = {15,16,16,14,1,1,30};
 static const unsigned char glyph_T[7] = {31,4,4,4,4,4,4};
 static const unsigned char glyph_U[7] = {17,17,17,17,17,17,14};
 static const unsigned char glyph_V[7] = {17,17,17,17,17,10,4};
 static const unsigned char glyph_W[7] = {17,17,17,21,21,21,10};
+static const unsigned char glyph_X[7] = {17,10,4,4,4,10,17};
 static const unsigned char glyph_Y[7] = {17,17,10,4,4,4,4};
+static const unsigned char glyph_Z[7] = {31,1,2,4,8,16,31};
+static const unsigned char glyph_percent[7] = {17,2,4,8,16,17,0};
+static const unsigned char glyph_colon[7] = {0,4,4,0,4,4,0};
+static const unsigned char glyph_plus[7] = {0,4,4,31,4,4,0};
+static const unsigned char glyph_slash[7] = {1,1,2,4,8,16,16};
 static const unsigned char glyph_0[7] = {14,17,19,21,25,17,14};
 static const unsigned char glyph_1[7] = {4,12,4,4,4,4,14};
 static const unsigned char glyph_2[7] = {14,17,1,2,4,8,31};
@@ -1935,18 +1953,27 @@ static const unsigned char *get_glyph(char c)
         case 'G': return glyph_G;
         case 'H': return glyph_H;
         case 'I': return glyph_I;
+        case 'J': return glyph_J;
+        case 'K': return glyph_K;
         case 'L': return glyph_L;
         case 'M': return glyph_M;
         case 'N': return glyph_N;
         case 'O': return glyph_O;
         case 'P': return glyph_P;
+        case 'Q': return glyph_Q;
         case 'R': return glyph_R;
         case 'S': return glyph_S;
         case 'T': return glyph_T;
         case 'U': return glyph_U;
         case 'V': return glyph_V;
         case 'W': return glyph_W;
+        case 'X': return glyph_X;
         case 'Y': return glyph_Y;
+        case 'Z': return glyph_Z;
+        case '%': return glyph_percent;
+        case ':': return glyph_colon;
+        case '+': return glyph_plus;
+        case '/': return glyph_slash;
         case '0': return glyph_0;
         case '1': return glyph_1;
         case '2': return glyph_2;
@@ -1959,6 +1986,37 @@ static const unsigned char *get_glyph(char c)
         case '9': return glyph_9;
         default:  return NULL;
     }
+}
+
+static int font_run_count(const unsigned char *g)
+{
+    int runs = 0;
+    int row;
+    int col;
+
+    for (row = 0; row < 7; ++row)
+    {
+        int in_run = 0;
+        for (col = 0; col < 5; ++col)
+        {
+            int set = (g[row] & (1 << (4 - col))) != 0;
+            if (set && !in_run) ++runs;
+            in_run = set;
+        }
+    }
+
+    for (col = 0; col < 5; ++col)
+    {
+        int in_run = 0;
+        for (row = 0; row < 7; ++row)
+        {
+            int set = (g[row] & (1 << (4 - col))) != 0;
+            if (set && !in_run) ++runs;
+            in_run = set;
+        }
+    }
+
+    return runs;
 }
 
 static int text_width(const char *text, int scale)
@@ -1974,6 +2032,34 @@ static int text_width(const char *text, int scale)
     return width > 0 ? width - scale : 0;
 }
 
+static void put_text_sprite(
+    void *vertices,
+    int *index,
+    int x0,
+    int y0,
+    int x1,
+    int y1
+)
+{
+    typedef struct
+    {
+        short x;
+        short y;
+        short z;
+    } Vertex;
+    Vertex *v = (Vertex *)vertices;
+
+    v[*index].x = (short)x0;
+    v[*index].y = (short)y0;
+    v[*index].z = 0;
+    ++(*index);
+    v[*index].x = (short)x1;
+    v[*index].y = (short)y1;
+    v[*index].z = 0;
+    ++(*index);
+}
+
+/* Run-based strokes make the built-in lettering read less like block pixels. */
 static void draw_text(
     const char *text,
     int x,
@@ -1990,31 +2076,27 @@ static void draw_text(
     } Vertex;
 
     const char *p;
-    int pixel_count = 0;
+    int sprite_count = 0;
     int n = 0;
     int current_x = x;
+    int stroke;
     Vertex *v;
+
+    if (scale < 1) scale = 1;
+    stroke = (scale * 2) / 3;
+    if (stroke < 1) stroke = 1;
 
     for (p = text; *p; ++p)
     {
         const unsigned char *g = get_glyph(*p);
-        int row;
-        int col;
-
-        if (!g)
-            continue;
-
-        for (row = 0; row < 7; ++row)
-            for (col = 0; col < 5; ++col)
-                if (g[row] & (1 << (4 - col)))
-                    ++pixel_count;
+        if (g) sprite_count += font_run_count(g);
     }
 
-    if (pixel_count <= 0)
+    if (sprite_count <= 0)
         return;
 
     v = (Vertex *)sceGuGetMemory(
-        pixel_count * 2 * sizeof(Vertex)
+        sprite_count * 2 * sizeof(Vertex)
     );
 
     sceGuColor(color);
@@ -2033,22 +2115,53 @@ static void draw_text(
 
         for (row = 0; row < 7; ++row)
         {
-            for (col = 0; col < 5; ++col)
+            col = 0;
+            while (col < 5)
             {
-                if (g[row] & (1 << (4 - col)))
-                {
-                    v[n].x = (short)(current_x + col * scale);
-                    v[n].y = (short)(y + row * scale);
-                    v[n].z = 0;
+                int start;
+                int end;
+                int cy;
 
-                    v[n + 1].x =
-                        (short)(current_x + (col + 1) * scale);
-                    v[n + 1].y =
-                        (short)(y + (row + 1) * scale);
-                    v[n + 1].z = 0;
+                while (col < 5 && !(g[row] & (1 << (4 - col)))) ++col;
+                if (col >= 5) break;
+                start = col;
+                while (col < 5 && (g[row] & (1 << (4 - col)))) ++col;
+                end = col;
+                cy = y + row * scale + scale / 2;
 
-                    n += 2;
-                }
+                put_text_sprite(
+                    v, &n,
+                    current_x + start * scale,
+                    cy - stroke / 2,
+                    current_x + end * scale,
+                    cy + (stroke + 1) / 2
+                );
+            }
+        }
+
+        for (col = 0; col < 5; ++col)
+        {
+            row = 0;
+            while (row < 7)
+            {
+                int start;
+                int end;
+                int cx;
+
+                while (row < 7 && !(g[row] & (1 << (4 - col)))) ++row;
+                if (row >= 7) break;
+                start = row;
+                while (row < 7 && (g[row] & (1 << (4 - col)))) ++row;
+                end = row;
+                cx = current_x + col * scale + scale / 2;
+
+                put_text_sprite(
+                    v, &n,
+                    cx - stroke / 2,
+                    y + start * scale,
+                    cx + (stroke + 1) / 2,
+                    y + end * scale
+                );
             }
         }
 
@@ -2385,6 +2498,26 @@ static void music_stop(void)
     }
 }
 
+static int is_driveable_gameplay_state(void)
+{
+    return state == GAME_STATE_STORY ||
+           state == GAME_STATE_FREE_WORLD;
+}
+
+/* The music follows the player's vehicle state, never menus or walking. */
+static void update_vehicle_music(void)
+{
+    int should_play =
+        in_vehicle &&
+        current_vehicle >= 0 &&
+        is_driveable_gameplay_state();
+
+    if (should_play && !music_running)
+        music_start();
+    else if (!should_play && music_running)
+        music_stop();
+}
+
 /* ------------------------------------------------------------------------- */
 /* Fade                                                                       */
 /* ------------------------------------------------------------------------- */
@@ -2393,6 +2526,7 @@ static void start_transition(
     GameState next_state
 )
 {
+    music_stop();
     transition_active = 1;
     transition_phase = 0;
     transition_alpha = 0;
@@ -2420,13 +2554,8 @@ static void update_transition(void)
             if (state == GAME_STATE_SAVE_FINISHED)
                 save_finished_timer = 0;
 
-            /* Change state while fully black. Start/stop audio only after
-             * the fade-in has completed so Press Start itself stays silent. */
-            music_stop();
-
             if (state == GAME_STATE_STORY_INTRO)
             {
-                music_stop();
                 intro_frame = 0;
                 intro_phase = 0;
                 intro_van_x = -42.0f;
@@ -2449,14 +2578,6 @@ static void update_transition(void)
         {
             transition_alpha = 0;
             transition_active = 0;
-
-            if (state == GAME_STATE_MAIN_MENU ||
-                state == GAME_STATE_STORY ||
-                state == GAME_STATE_FREE_WORLD ||
-                state == GAME_STATE_MULTIPLAYER)
-            {
-                music_start();
-            }
         }
     }
 }
@@ -2987,6 +3108,35 @@ static void update_pedestrians(void)
     }
 }
 
+static void update_world_clock(void)
+{
+    unsigned int now = sceKernelGetSystemTimeLow();
+    unsigned int elapsed;
+
+    if (world_clock_ticks == 0)
+    {
+        world_clock_ticks = now;
+        return;
+    }
+
+    elapsed = now - world_clock_ticks;
+    world_clock_ticks = now;
+
+    /* Ignore long debugger/emulator pauses instead of jumping through the day. */
+    if (elapsed > 3000000u)
+        elapsed = 3000000u;
+
+    if (state == GAME_STATE_STORY_INTRO ||
+        state == GAME_STATE_STORY ||
+        state == GAME_STATE_FREE_WORLD ||
+        state == GAME_STATE_MULTIPLAYER)
+    {
+        world_time_minutes += (float)elapsed / 1000000.0f;
+        while (world_time_minutes >= 1440.0f)
+            world_time_minutes -= 1440.0f;
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* GU / init                                                                 */
 /* ------------------------------------------------------------------------- */
@@ -3113,70 +3263,236 @@ static int lerp_channel(int a, int b, int t)
     return a + ((b - a) * t) / 255;
 }
 
-static void render_sunset_sky(void)
+typedef struct
 {
-    const int bands = 34;
-    int i;
+    float minute;
+    unsigned int top;
+    unsigned int horizon;
+    unsigned int fog;
+    int night_dim;
+} SkyKeyframe;
 
-    /* A PSP-era violet-to-coral dusk gradient, drawn before the 3D world. */
-    begin_2d();
+typedef struct
+{
+    unsigned int top;
+    unsigned int horizon;
+    unsigned int fog;
+    int night_dim;
+} SkyColors;
 
-    for (i = 0; i < bands; ++i)
+static unsigned int lerp_rgb(unsigned int a, unsigned int b, int t)
+{
+    int ar = (int)((a >> 16) & 255);
+    int ag = (int)((a >> 8) & 255);
+    int ab = (int)(a & 255);
+    int br = (int)((b >> 16) & 255);
+    int bg = (int)((b >> 8) & 255);
+    int bb = (int)(b & 255);
+
+    return ((unsigned int)lerp_channel(ar, br, t) << 16) |
+           ((unsigned int)lerp_channel(ag, bg, t) << 8) |
+           (unsigned int)lerp_channel(ab, bb, t);
+}
+
+static SkyColors get_sky_colors(void)
+{
+    static const SkyKeyframe cycle[] =
     {
-        int y0 = (SCREEN_HEIGHT * i) / bands;
-        int y1 = (SCREEN_HEIGHT * (i + 1)) / bands;
-        int r0, g0, b0, r1, g1, b1;
-        int r, g, b;
-        int t = (i * 255) / (bands - 1);
+        {   0.0f, 0x071229, 0x263452, 0x2a3550, 74 },
+        { 300.0f, 0x172044, 0x645274, 0x56516e, 52 },
+        { 360.0f, 0x494c79, 0xf09a72, 0xa7767f, 23 },
+        { 420.0f, 0x7896bb, 0xf5cba2, 0xa8aab0,  0 },
+        { 720.0f, 0x67a6d6, 0xdce2d9, 0xaebdca,  0 },
+        { 960.0f, 0x7097c2, 0xe4b57f, 0xc3a582,  0 },
+        {1020.0f, 0x695381, 0xf19170, 0xc77b76, 10 },
+        {1080.0f, 0x3b3467, 0xda795c, 0x754c6a, 35 },
+        {1140.0f, 0x16224a, 0x71506c, 0x434560, 63 },
+        {1200.0f, 0x071229, 0x263452, 0x2a3550, 74 },
+        {1440.0f, 0x071229, 0x263452, 0x2a3550, 74 }
+    };
+    const int count = sizeof(cycle) / sizeof(cycle[0]);
+    float minute = world_time_minutes;
+    int i;
+    int t = 0;
+    SkyColors colors;
 
-        if (t < 160)
-        {
-            int local = (t * 255) / 160;
-            r0 = 23;  g0 = 28;  b0 = 79;
-            r1 = 93;  g1 = 91;  b1 = 151;
-            r = lerp_channel(r0, r1, local);
-            g = lerp_channel(g0, g1, local);
-            b = lerp_channel(b0, b1, local);
-        }
-        else if (t < 220)
-        {
-            int local = ((t - 160) * 255) / 60;
-            r0 = 93;  g0 = 91;  b0 = 151;
-            r1 = 255; g1 = 157; b1 = 111;
-            r = lerp_channel(r0, r1, local);
-            g = lerp_channel(g0, g1, local);
-            b = lerp_channel(b0, b1, local);
-        }
-        else
-        {
-            int local = ((t - 220) * 255) / 35;
-            if (local > 255) local = 255;
-            r0 = 255; g0 = 157; b0 = 111;
-            r1 = 147; g1 = 66;  b1 = 112;
-            r = lerp_channel(r0, r1, local);
-            g = lerp_channel(g0, g1, local);
-            b = lerp_channel(b0, b1, local);
-        }
+    while (minute < 0.0f)
+        minute += 1440.0f;
+    while (minute >= 1440.0f)
+        minute -= 1440.0f;
 
-        draw_rect_2d(
-            0,
-            y0,
-            SCREEN_WIDTH,
-            y1 - y0,
-            gu_color_rgba(r, g, b, 255)
-        );
+    for (i = 0; i < count - 1; ++i)
+    {
+        if (minute >= cycle[i].minute && minute <= cycle[i + 1].minute)
+        {
+            float span = cycle[i + 1].minute - cycle[i].minute;
+            float amount = span > 0.0f
+                ? (minute - cycle[i].minute) / span
+                : 0.0f;
+            t = (int)(amount * 255.0f);
+            colors.top = lerp_rgb(cycle[i].top, cycle[i + 1].top, t);
+            colors.horizon = lerp_rgb(cycle[i].horizon, cycle[i + 1].horizon, t);
+            colors.fog = lerp_rgb(cycle[i].fog, cycle[i + 1].fog, t);
+            colors.night_dim = lerp_channel(
+                cycle[i].night_dim,
+                cycle[i + 1].night_dim,
+                t
+            );
+            return colors;
+        }
     }
 
-    /* The PSP depth buffer is reversed; retain GEQUAL and allow Z writes. */
+    colors.top = cycle[0].top;
+    colors.horizon = cycle[0].horizon;
+    colors.fog = cycle[0].fog;
+    colors.night_dim = cycle[0].night_dim;
+    return colors;
+}
+
+static unsigned int gu_color_from_rgb24(unsigned int rgb)
+{
+    return gu_color_rgba(
+        (int)((rgb >> 16) & 255),
+        (int)((rgb >> 8) & 255),
+        (int)(rgb & 255),
+        255
+    );
+}
+
+static void begin_world_3d(
+    float eye_x,
+    float eye_y,
+    float eye_z,
+    float center_x,
+    float center_y,
+    float center_z
+)
+{
+    SkyColors sky = get_sky_colors();
+
+    set_3d_camera(
+        eye_x, eye_y, eye_z,
+        center_x, center_y, center_z
+    );
+
+    world_texture_bound = -1;
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_LIGHTING);
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     sceGuDepthMask(GU_FALSE);
+    sceGuShadeModel(GU_FLAT);
     sceGuFog(
         32.0f,
-        145.0f,
-        gu_color_rgba(206, 126, 143, 255)
+        graphics_quality ? 165.0f : 112.0f,
+        gu_color_from_rgb24(sky.fog)
     );
     sceGuEnable(GU_FOG);
+}
+
+static void begin_player_world_3d(void)
+{
+    SkyColors sky;
+
+    set_third_person_camera();
+    sky = get_sky_colors();
+    world_texture_bound = -1;
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_LIGHTING);
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthFunc(GU_GEQUAL);
+    sceGuDepthMask(GU_FALSE);
+    sceGuShadeModel(GU_FLAT);
+    sceGuFog(
+        32.0f,
+        graphics_quality ? 165.0f : 112.0f,
+        gu_color_from_rgb24(sky.fog)
+    );
+    sceGuEnable(GU_FOG);
+}
+
+static void render_sunset_sky(void)
+{
+    typedef struct
+    {
+        unsigned int color;
+        short x;
+        short y;
+        short z;
+    } SkyVertex;
+
+    SkyColors sky = get_sky_colors();
+    SkyVertex *v;
+    unsigned int top = gu_color_from_rgb24(sky.top);
+    unsigned int horizon = gu_color_from_rgb24(sky.horizon);
+
+    begin_2d();
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_FOG);
+    sceGuShadeModel(GU_SMOOTH);
+
+    v = (SkyVertex *)sceGuGetMemory(4 * sizeof(SkyVertex));
+    v[0].color = top;     v[0].x = 0;             v[0].y = 0;              v[0].z = 0;
+    v[1].color = top;     v[1].x = SCREEN_WIDTH;  v[1].y = 0;              v[1].z = 0;
+    v[2].color = horizon; v[2].x = 0;             v[2].y = SCREEN_HEIGHT;  v[2].z = 0;
+    v[3].color = horizon; v[3].x = SCREEN_WIDTH;  v[3].y = SCREEN_HEIGHT;  v[3].z = 0;
+
+    sceGuDrawArray(
+        GU_TRIANGLE_STRIP,
+        GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D,
+        4,
+        NULL,
+        v
+    );
+    sceGuShadeModel(GU_FLAT);
+}
+
+static void draw_scene_tone(void)
+{
+    SkyColors sky = get_sky_colors();
+    int dark_alpha = sky.night_dim;
+    int bright_alpha = 0;
+
+    if (brightness_percent < 100)
+        dark_alpha += (100 - brightness_percent) * 2;
+    else if (brightness_percent > 100)
+        bright_alpha = (brightness_percent - 100) * 2;
+
+    if (dark_alpha > 180) dark_alpha = 180;
+    if (bright_alpha > 70) bright_alpha = 70;
+    if (dark_alpha == 0 && bright_alpha == 0)
+        return;
+
+    begin_2d();
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+    if (dark_alpha > 0)
+        draw_rect_2d(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT,
+            gu_color_rgba(0, 0, 0, dark_alpha)
+        );
+    if (bright_alpha > 0)
+        draw_rect_2d(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT,
+            gu_color_rgba(255, 255, 255, bright_alpha)
+        );
+    sceGuDisable(GU_BLEND);
+}
+
+static void draw_world_clock(void)
+{
+    char clock_text[6];
+    int hour = ((int)world_time_minutes / 60) % 24;
+    int minute = (int)world_time_minutes % 60;
+
+    snprintf(clock_text, sizeof(clock_text), "%02d:%02d", hour, minute);
+    draw_text(clock_text, 414, 18, 2, 0xffffffff);
 }
 
 static void render_game_hud(
@@ -3200,6 +3516,8 @@ static void render_game_hud(
         3,
         0xffffffff
     );
+
+    draw_world_clock();
 
     draw_rect_2d(
         0,
@@ -3309,6 +3627,10 @@ int psp_game_init(void)
     selected_language = 0;
     selected_menu = 0;
     settings_selection = 0;
+    brightness_percent = 100;
+    graphics_quality = 0;
+    world_time_minutes = 17.0f * 60.0f;
+    world_clock_ticks = sceKernelGetSystemTimeLow();
 
     story_step = 0;
 
@@ -3354,6 +3676,8 @@ void psp_game_update(void)
 
     if (!game_initialized)
         return;
+
+    update_world_clock();
 
     if (transition_active)
     {
@@ -3771,28 +4095,32 @@ void psp_game_update(void)
 
             if (pressed & PSP_CTRL_DOWN)
             {
-                if (settings_selection < 1)
+                if (settings_selection < 2)
                     ++settings_selection;
             }
 
-            if (pressed & PSP_CTRL_CROSS)
+            if (settings_selection == 0)
             {
-                if (settings_selection == 0)
-                {
-                    music_stop();
-                }
-                else
-                {
-                    sceIoRemove(
-                        SAVE_FILE
-                    );
-
-                    music_stop();
-
-                    start_transition(
-                        GAME_STATE_TITLE
-                    );
-                }
+                if (pressed & PSP_CTRL_LEFT)
+                    brightness_percent -= 5;
+                if (pressed & PSP_CTRL_RIGHT)
+                    brightness_percent += 5;
+                if (pressed & PSP_CTRL_CROSS)
+                    brightness_percent += 5;
+                if (brightness_percent < 60)
+                    brightness_percent = 60;
+                if (brightness_percent > 130)
+                    brightness_percent = 130;
+            }
+            else if (settings_selection == 1)
+            {
+                if (pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT | PSP_CTRL_CROSS))
+                    graphics_quality = !graphics_quality;
+            }
+            else if (pressed & PSP_CTRL_CROSS)
+            {
+                sceIoRemove(SAVE_FILE);
+                start_transition(GAME_STATE_TITLE);
             }
 
             if (pressed & PSP_CTRL_CIRCLE)
@@ -3807,6 +4135,8 @@ void psp_game_update(void)
         default:
             break;
     }
+
+    update_vehicle_music();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3869,7 +4199,7 @@ static void render_story_intro(void)
         center_z = 12.0f;
     }
 
-    set_3d_camera(
+    begin_world_3d(
         camera_x,
         camera_y,
         camera_z,
@@ -3941,6 +4271,7 @@ static void render_story_intro(void)
             : 0xff6c5748
     );
 
+    draw_scene_tone();
     begin_2d();
 
     draw_text(
@@ -4199,6 +4530,22 @@ void psp_game_render(void)
                 MainMenu_start
             );
 
+            /* Replace the old year in the baked logo with the new game title. */
+            draw_rect_2d(
+                103,
+                79,
+                80,
+                29,
+                0xdd090a0d
+            );
+            draw_text(
+                "GTA",
+                116,
+                83,
+                3,
+                0xffe0b66b
+            );
+
             /*
              * Underline selection without hiding text.
              */
@@ -4218,7 +4565,7 @@ void psp_game_render(void)
                     y,
                     180,
                     2,
-                    0xff63b5ff
+                    0xffe0b66b
                 );
             }
 
@@ -4244,7 +4591,7 @@ void psp_game_render(void)
 
             render_sunset_sky();
 
-            set_third_person_camera();
+            begin_player_world_3d();
 
             render_city_world();
 
@@ -4263,6 +4610,7 @@ void psp_game_render(void)
                 0xff9a6a49
             );
 
+            draw_scene_tone();
             render_game_hud(
                 "STORY MODE"
             );
@@ -4277,13 +4625,14 @@ void psp_game_render(void)
 
             render_sunset_sky();
 
-            set_third_person_camera();
+            begin_player_world_3d();
 
             render_city_world();
 
             if (!in_vehicle)
                 draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
 
+            draw_scene_tone();
             render_game_hud(
                 "FREE OPEN WORLD"
             );
@@ -4298,7 +4647,7 @@ void psp_game_render(void)
 
             render_sunset_sky();
 
-            set_third_person_camera();
+            begin_player_world_3d();
 
             render_city_world();
 
@@ -4313,6 +4662,7 @@ void psp_game_render(void)
                 player2_walk_phase
             );
 
+            draw_scene_tone();
             render_game_hud(
                 "MULTIPLAYER LOCAL"
             );
@@ -4320,82 +4670,57 @@ void psp_game_render(void)
             break;
 
         case GAME_STATE_SETTINGS:
-
-            sceGuDisable(
-                GU_DEPTH_TEST
-            );
-
-            begin_2d();
-
-            draw_rect_2d(
-                0,
-                0,
-                SCREEN_WIDTH,
-                SCREEN_HEIGHT,
-                0xff677a89
-            );
-
-            draw_text(
-                "SYSTEM SETTINGS",
-                24,
-                24,
-                4,
-                0xffffffff
-            );
-
-            if (settings_selection == 0)
             {
-                draw_rect_2d(
-                    24,
-                    78,
-                    360,
-                    40,
-                    0xff344a56
+                int i;
+                int y;
+                char value[20];
+                const char *labels[3] =
+                {
+                    "BRIGHTNESS",
+                    "GRAPHICS DETAIL",
+                    "RESET SAVE DATA"
+                };
+
+                sceGuDisable(GU_DEPTH_TEST);
+                begin_2d();
+                draw_rect_2d(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0xff111923);
+                draw_rect_2d(16, 12, 448, 248, 0xff1c2b36);
+                draw_rect_2d(16, 12, 448, 3, 0xffd1a15e);
+
+                draw_text("GINSENG STRIP GTA", 30, 25, 3, 0xfff1e7d2);
+                draw_text("DISPLAY + GRAPHICS TUNING", 32, 53, 1, 0xff9eb0ba);
+
+                for (i = 0; i < 3; ++i)
+                {
+                    y = 75 + i * 46;
+                    draw_rect_2d(
+                        28,
+                        y,
+                        424,
+                        38,
+                        i == settings_selection ? 0xff4a3c2b : 0xff293a46
+                    );
+                    if (i == settings_selection)
+                        draw_rect_2d(28, y, 4, 38, 0xffe0b66b);
+                    draw_text(labels[i], 42, y + 11, 2, 0xfff0f1ed);
+                }
+
+                snprintf(value, sizeof(value), "%d%%", brightness_percent);
+                draw_text(value, 375, 86, 2, 0xffe0b66b);
+                draw_text(
+                    graphics_quality ? "QUALITY" : "PERFORMANCE",
+                    graphics_quality ? 364 : 330,
+                    132,
+                    2,
+                    0xffe0b66b
                 );
+                draw_text("X CONFIRM", 344, 178, 2, 0xffe0b66b);
+
+                draw_text("MUSIC PLAYS WHILE RIDING", 32, 222, 2, 0xffcbd8dd);
+                draw_text("UP DOWN MOVE  LEFT RIGHT ADJUST", 32, 244, 1, 0xff9eb0ba);
+                draw_text("X SELECT/RESET", 326, 244, 1, 0xffe0b66b);
+                draw_text("O BACK", 405, 244, 1, 0xfff0f1ed);
             }
-            else
-            {
-                draw_rect_2d(
-                    24,
-                    140,
-                    360,
-                    40,
-                    0xff344a56
-                );
-            }
-
-            draw_text(
-                "MUSIC",
-                42,
-                92,
-                3,
-                0xffffffff
-            );
-
-            draw_text(
-                "RESET SAVE",
-                42,
-                154,
-                3,
-                0xffffffff
-            );
-
-            draw_text(
-                "X SELECT",
-                24,
-                238,
-                2,
-                0xffffffff
-            );
-
-            draw_text(
-                "O BACK",
-                364,
-                238,
-                2,
-                0xffffffff
-            );
-
             break;
 
         default:
