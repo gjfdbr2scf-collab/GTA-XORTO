@@ -3435,6 +3435,8 @@ static void render_sunset_sky(void)
     sceGuDisable(GU_BLEND);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_FOG);
+    /* The sky is a 2D backdrop; it must never write depth for the 3D scene. */
+    sceGuDepthMask(GU_TRUE);
     sceGuShadeModel(GU_SMOOTH);
 
     v = (SkyVertex *)sceGuGetMemory(4 * sizeof(SkyVertex));
@@ -3451,6 +3453,15 @@ static void render_sunset_sky(void)
         v
     );
     sceGuShadeModel(GU_FLAT);
+
+    /* Start the world with a clean depth buffer after drawing the backdrop.
+     * This avoids stale 2D depth values hiding all city geometry on PSP GU
+     * implementations that preserve depth state across 2D draws. */
+    sceGuClearDepth(0);
+    sceGuClear(GU_DEPTH_BUFFER_BIT);
+    sceGuDepthMask(GU_FALSE);
+    sceGuDepthFunc(GU_GEQUAL);
+    sceGuEnable(GU_DEPTH_TEST);
 }
 
 static void draw_scene_tone(void)
