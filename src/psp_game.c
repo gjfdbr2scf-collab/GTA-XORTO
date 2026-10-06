@@ -24,7 +24,7 @@
  * - classic early-2000s console / PS2-style realistic low-poly look
  *
  * Flow:
- * TITLE -> LANGUAGE -> SAVE -> SAVING -> FINISH SAVE -> MAIN MENU
+ * TITLE -> MAIN MENU -> STORY / FREE OPEN WORLD / LOCAL MULTIPLAYER
  *
  * Main Menu:
  * STORY MODE
@@ -35,7 +35,7 @@
  * Story:
  * cinematic van intro -> two brothers exit (older + youngest child)
  * -> third cousin opens door
- * -> player takes control -> walk together through Peine -> bridge
+ * -> player takes control -> walk through Peine -> bridge
  *
  * Music:
  * main menu theme and while the player is inside a vehicle
@@ -108,6 +108,9 @@ static int selected_menu = 0;
 static int settings_selection = 0;
 static int brightness_percent = 100;
 static int graphics_quality = 0; /* 0 = performance, 1 = quality */
+static int camera_first_person = 0;
+static float wind_phase = 0.0f;
+static int footstep_frames = 0;
 
 /* One in-game minute passes per real second: a full day lasts 24 minutes. */
 static float world_time_minutes = 17.0f * 60.0f;
@@ -136,13 +139,31 @@ static int save_finished_timer = 0;
 #define MUSIC_RATE    22050
 #define MUSIC_SAMPLES 1024
 #define MUSIC_VOLUME  0x6000
+#define SFX_CLICK_SAMPLES 1450
+#define SFX_STEP_SAMPLES 1900
 
 static volatile int music_running = 0;
+static volatile int music_enabled = 0;
+static volatile int ambience_enabled = 0;
+static volatile int click_sfx_pending = 0;
+static volatile int footstep_sfx_pending = 0;
 static volatile unsigned int music_position = 0;
 static SceUID music_thread = -1;
 
 static short __attribute__((aligned(64)))
     music_buffer[MUSIC_SAMPLES];
+
+static void queue_ui_click(void)
+{
+    if (click_sfx_pending < 4)
+        ++click_sfx_pending;
+}
+
+static void queue_footstep(void)
+{
+    if (footstep_sfx_pending < 3)
+        ++footstep_sfx_pending;
+}
 
 /* ------------------------------------------------------------------------- */
 /* Story cinematic                                                           */
@@ -613,6 +634,8 @@ static void bind_world_texture(int texture_id)
         GU_TCC_RGB
     );
 
+    sceGuTexWrap(GU_REPEAT, GU_REPEAT);
+
     sceGuTexFilter(
         GU_LINEAR,
         GU_LINEAR
@@ -671,6 +694,33 @@ static void draw_textured_quad(
     v[4] = v[2];
     v[5].u = 0;               v[5].v = WORLD_TEX_H;
     v[5].color = color;       v[5].x = x3; v[5].y = y3; v[5].z = z3;
+
+    draw_textured_triangles(v, 6, texture_id);
+}
+
+static void draw_textured_quad_tiled(
+    float x0, float y0, float z0,
+    float x1, float y1, float z1,
+    float x2, float y2, float z2,
+    float x3, float y3, float z3,
+    float u_repeat,
+    float v_repeat,
+    int texture_id,
+    unsigned int color
+)
+{
+    WorldVertex *v = (WorldVertex *)sceGuGetMemory(
+        6 * sizeof(WorldVertex)
+    );
+    unsigned short u = (unsigned short)(WORLD_TEX_W * u_repeat);
+    unsigned short t = (unsigned short)(WORLD_TEX_H * v_repeat);
+
+    v[0].u=0; v[0].v=0; v[0].color=color; v[0].x=x0; v[0].y=y0; v[0].z=z0;
+    v[1].u=u; v[1].v=0; v[1].color=color; v[1].x=x1; v[1].y=y1; v[1].z=z1;
+    v[2].u=u; v[2].v=t; v[2].color=color; v[2].x=x2; v[2].y=y2; v[2].z=z2;
+    v[3]=v[0];
+    v[4]=v[2];
+    v[5].u=0; v[5].v=t; v[5].color=color; v[5].x=x3; v[5].y=y3; v[5].z=z3;
 
     draw_textured_triangles(v, 6, texture_id);
 }
@@ -1156,6 +1206,7 @@ static void draw_palm_frond(
     float angle,
     float length,
     float width,
+    float wind,
     unsigned int color
 )
 {
@@ -1179,8 +1230,8 @@ static void draw_palm_frond(
         float z0 = z + dz * length * t0;
         float x1 = x + dx * length * t1;
         float z1 = z + dz * length * t1;
-        float y0 = y + sinf(t0 * PI_F) * 0.20f - t0 * t0 * 0.48f;
-        float y1 = y + sinf(t1 * PI_F) * 0.20f - t1 * t1 * 0.48f;
+        float y0 = y + sinf(t0 * PI_F) * 0.20f - t0 * t0 * 0.48f + wind * t0;
+        float y1 = y + sinf(t1 * PI_F) * 0.20f - t1 * t1 * 0.48f + wind * t1;
         unsigned int c0 = shade_gu_color(color, 100 - i * 3);
         unsigned int c1 = shade_gu_color(color, 94 - i * 3);
         int n = i * 6;
@@ -1207,8 +1258,11 @@ static void draw_palm_tree(float x, float z, float scale_factor)
     float trunk_h = 4.6f * scale_factor;
     float lean_x = 0.52f * scale_factor;
     float lean_z = 0.18f * scale_factor;
-    float crown_x = x + lean_x;
-    float crown_z = z + lean_z;
+    float tree_wind = wind_phase + x * 0.13f + z * 0.09f;
+    float sway_x = sinf(tree_wind) * 0.12f * scale_factor;
+    float sway_z = cosf(tree_wind * 0.83f) * 0.05f * scale_factor;
+    float crown_x = x + lean_x + sway_x;
+    float crown_z = z + lean_z + sway_z;
     int i;
 
     draw_shadow_blob(x, z, 1.05f * scale_factor, 0.80f * scale_factor);
@@ -1216,8 +1270,8 @@ static void draw_palm_tree(float x, float z, float scale_factor)
     for (i = 0; i < trunk_segments; ++i)
     {
         float t = (float)i / (float)trunk_segments;
-        float cx = x + lean_x * (t + 0.125f);
-        float cz = z + lean_z * (t + 0.125f);
+        float cx = x + (lean_x + sway_x) * (t + 0.125f);
+        float cz = z + (lean_z + sway_z) * (t + 0.125f);
         float radius = 0.22f * scale_factor * (1.0f - t * 0.24f);
 
         draw_cylinder_y(
@@ -1243,6 +1297,7 @@ static void draw_palm_tree(float x, float z, float scale_factor)
             angle,
             length,
             0.42f * scale_factor,
+            sinf(tree_wind + (float)i * 0.8f) * 0.16f * scale_factor,
             gu_color_rgba(59 + (i & 1) * 8, 113 + (i & 1) * 10, 55, 255)
         );
     }
@@ -1751,11 +1806,12 @@ static void draw_road_segment(
 {
     if (horizontal)
     {
-        draw_textured_quad(
+        draw_textured_quad_tiled(
             x-w*0.5f,-0.05f,z-d*0.5f,
             x+w*0.5f,-0.05f,z-d*0.5f,
             x+w*0.5f,-0.05f,z+d*0.5f,
             x-w*0.5f,-0.05f,z+d*0.5f,
+            w / 6.0f, d / 6.0f,
             TEX_ASPHALT,0xffffffff
         );
 
@@ -1769,11 +1825,12 @@ static void draw_road_segment(
     }
     else
     {
-        draw_textured_quad(
+        draw_textured_quad_tiled(
             x-w*0.5f,-0.05f,z-d*0.5f,
             x+w*0.5f,-0.05f,z-d*0.5f,
             x+w*0.5f,-0.05f,z+d*0.5f,
             x-w*0.5f,-0.05f,z+d*0.5f,
+            w / 6.0f, d / 6.0f,
             TEX_ASPHALT,0xffffffff
         );
 
@@ -1803,11 +1860,12 @@ static void render_city_world(void)
     make_world_textures();
 
     /* Continuous ground. */
-    draw_textured_quad(
-        -100.0f,0.0f,-100.0f,
-         100.0f,0.0f,-100.0f,
-         100.0f,0.0f, 100.0f,
-        -100.0f,0.0f, 100.0f,
+    draw_textured_quad_tiled(
+        -100.0f,-0.25f,-100.0f,
+         100.0f,-0.25f,-100.0f,
+         100.0f,-0.25f, 100.0f,
+        -100.0f,-0.25f, 100.0f,
+        30.0f, 30.0f,
         TEX_GRASS,
         0xffffffff
     );
@@ -1876,22 +1934,26 @@ static void render_city_world(void)
         );
     }
 
-    for (i = 0; i < PEDESTRIAN_COUNT; ++i)
+    /* Ambient pedestrians only belong to the free-roam city. */
+    if (state == GAME_STATE_FREE_WORLD)
     {
-        Pedestrian *p = &pedestrians[i];
-        float walk = sinf(p->phase * 1.7f);
+        for (i = 0; i < PEDESTRIAN_COUNT; ++i)
+        {
+            Pedestrian *p = &pedestrians[i];
+            float walk = sinf(p->phase * 1.7f);
 
-        if (!CAMERA_NEAR(p->x, p->z, pedestrian_view))
-            continue;
+            if (!CAMERA_NEAR(p->x, p->z, pedestrian_view))
+                continue;
 
-        draw_human_pose(
-            p->x,
-            0.0f,
-            p->z,
-            walk * 0.18f,
-            p->shirt,
-            p->phase * 16.0f
-        );
+            draw_human_pose(
+                p->x,
+                0.0f,
+                p->z,
+                walk * 0.18f,
+                p->shirt,
+                p->phase * 16.0f
+            );
+        }
     }
 
 #undef CAMERA_NEAR
@@ -2410,6 +2472,11 @@ static int music_thread_func(
 
     int channel;
     unsigned int i;
+    unsigned int noise_state = 0x37a9c241u;
+    int click_left = 0;
+    int click_phase = 0;
+    int step_left = 0;
+    int wind_filter = 0;
 
     (void)args;
     (void)argp;
@@ -2436,11 +2503,55 @@ static int music_thread_func(
     {
         for (i = 0; i < MUSIC_SAMPLES; ++i)
         {
-            if (music_position >= sample_count)
-                music_position = 0;
+            int mixed = 0;
 
-            music_buffer[i] =
-                samples[music_position++];
+            if (music_enabled)
+            {
+                if (music_position >= sample_count)
+                    music_position = 0;
+                mixed = samples[music_position++];
+            }
+
+            if (click_left == 0 && click_sfx_pending > 0)
+            {
+                --click_sfx_pending;
+                click_left = SFX_CLICK_SAMPLES;
+                click_phase = 0;
+            }
+            if (click_left > 0)
+            {
+                int envelope = click_left * 2200 / SFX_CLICK_SAMPLES;
+                mixed += (click_phase & 16) ? envelope : -envelope;
+                ++click_phase;
+                --click_left;
+            }
+
+            if (step_left == 0 && footstep_sfx_pending > 0)
+            {
+                --footstep_sfx_pending;
+                step_left = SFX_STEP_SAMPLES;
+            }
+            if (step_left > 0)
+            {
+                int noise;
+                noise_state = noise_state * 1664525u + 1013904223u;
+                noise = (int)((noise_state >> 24) & 255u) - 128;
+                mixed += noise * step_left * 22 / SFX_STEP_SAMPLES;
+                --step_left;
+            }
+
+            if (ambience_enabled)
+            {
+                int noise;
+                noise_state = noise_state * 1664525u + 1013904223u;
+                noise = (int)((noise_state >> 24) & 255u) - 128;
+                wind_filter += (noise - wind_filter) / 12;
+                mixed += wind_filter * 18;
+            }
+
+            if (mixed > 32767) mixed = 32767;
+            if (mixed < -32768) mixed = -32768;
+            music_buffer[i] = (short)mixed;
         }
 
         sceVaudioOutputBlocking(
@@ -2459,7 +2570,16 @@ static void music_start(void)
     if (music_running)
         return;
 
+    if (music_thread >= 0)
+    {
+        sceKernelWaitThreadEnd(music_thread, NULL);
+        sceKernelDeleteThread(music_thread);
+        music_thread = -1;
+    }
+
     music_position = 0;
+    music_enabled = 0;
+    ambience_enabled = 0;
     music_running = 1;
 
     music_thread = sceKernelCreateThread(
@@ -2487,6 +2607,8 @@ static void music_start(void)
 
 static void music_stop(void)
 {
+    music_enabled = 0;
+    ambience_enabled = 0;
     music_running = 0;
 
     if (music_thread >= 0)
@@ -2496,8 +2618,13 @@ static void music_stop(void)
             NULL
         );
 
+        sceKernelDeleteThread(music_thread);
+
         music_thread = -1;
     }
+
+    click_sfx_pending = 0;
+    footstep_sfx_pending = 0;
 }
 
 static int is_driveable_gameplay_state(void)
@@ -2506,18 +2633,40 @@ static int is_driveable_gameplay_state(void)
            state == GAME_STATE_FREE_WORLD;
 }
 
-/* Play in the main menu and while driving; keep other screens silent. */
+/* Keep the voice channel active for the menu track and quiet-world effects. */
 static void update_music_for_state(void)
 {
+    int in_world = state == GAME_STATE_STORY ||
+        state == GAME_STATE_FREE_WORLD ||
+        state == GAME_STATE_MULTIPLAYER;
+    int audio_needed = state == GAME_STATE_MAIN_MENU ||
+        state == GAME_STATE_SETTINGS || in_world;
     int should_play = state == GAME_STATE_MAIN_MENU ||
         (in_vehicle &&
          current_vehicle >= 0 &&
          is_driveable_gameplay_state());
 
-    if (should_play && !music_running)
+    if (transition_active)
+    {
+        music_enabled = 0;
+        ambience_enabled = 0;
+        return;
+    }
+
+    if (!audio_needed)
+    {
+        music_enabled = 0;
+        ambience_enabled = 0;
+        if (music_running || music_thread >= 0)
+            music_stop();
+        return;
+    }
+
+    if (!music_running)
         music_start();
-    else if (!should_play && music_running)
-        music_stop();
+
+    music_enabled = should_play;
+    ambience_enabled = in_world;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2528,7 +2677,8 @@ static void start_transition(
     GameState next_state
 )
 {
-    music_stop();
+    music_enabled = 0;
+    ambience_enabled = 0;
     transition_active = 1;
     transition_phase = 0;
     transition_alpha = 0;
@@ -2542,7 +2692,7 @@ static void update_transition(void)
 
     if (transition_phase == 0)
     {
-        transition_alpha += 18;
+            transition_alpha += 8;
 
         if (transition_alpha >= 255)
         {
@@ -2574,7 +2724,7 @@ static void update_transition(void)
     }
     else
     {
-        transition_alpha -= 10;
+        transition_alpha -= 6;
 
         if (transition_alpha <= 0)
         {
@@ -2667,6 +2817,70 @@ static void set_3d_camera(
     sceGumLoadIdentity();
 }
 
+static int city_point_blocked(
+    float x,
+    float z,
+    float radius,
+    int ignored_car
+)
+{
+    int i;
+
+    for (i = 0; i < BUILDING_COUNT; ++i)
+    {
+        const Building *b = &buildings[i];
+
+        if (fabsf(x - b->x) < b->w * 0.5f + radius &&
+            fabsf(z - b->z) < b->d * 0.5f + radius)
+            return 1;
+    }
+
+    for (i = 0; i < CAR_COUNT; ++i)
+    {
+        float dx;
+        float dz;
+        float along;
+        float across;
+
+        if (i == ignored_car)
+            continue;
+
+        dx = x - cars[i].x;
+        dz = z - cars[i].z;
+        along = dx * sinf(cars[i].yaw) - dz * cosf(cars[i].yaw);
+        across = dx * cosf(cars[i].yaw) + dz * sinf(cars[i].yaw);
+
+        if (fabsf(along) < 2.15f + radius &&
+            fabsf(across) < 1.05f + radius)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int city_camera_path_blocked(
+    float from_x,
+    float from_z,
+    float to_x,
+    float to_z,
+    int ignored_car
+)
+{
+    int sample;
+
+    for (sample = 1; sample <= 8; ++sample)
+    {
+        float t = (float)sample / 8.0f;
+        float x = from_x + (to_x - from_x) * t;
+        float z = from_z + (to_z - from_z) * t;
+
+        if (city_point_blocked(x, z, 0.34f, ignored_car))
+            return 1;
+    }
+
+    return 0;
+}
+
 static void set_third_person_camera(void)
 {
     float fx;
@@ -2678,14 +2892,25 @@ static void set_third_person_camera(void)
     if (in_vehicle && current_vehicle >= 0)
     {
         CityCar *c = &cars[current_vehicle];
+        float distance;
 
         fx = sinf(c->yaw);
         fz = -cosf(c->yaw);
 
+        for (distance = 7.0f; distance > 0.8f; distance -= 0.45f)
+        {
+            eye_x = c->x - fx * distance;
+            eye_z = c->z - fz * distance;
+            if (!city_camera_path_blocked(
+                    c->x, c->z, eye_x, eye_z, current_vehicle
+                ))
+                break;
+        }
+
         set_3d_camera(
-            c->x - fx * 7.0f,
+            eye_x,
             3.35f,
-            c->z - fz * 7.0f,
+            eye_z,
             c->x + fx * 2.5f,
             1.25f,
             c->z + fz * 2.5f
@@ -2696,9 +2921,39 @@ static void set_third_person_camera(void)
     fx = sinf(player_yaw);
     fz = -cosf(player_yaw);
 
-    eye_x = player_x - fx * 5.2f;
+    if (camera_first_person)
+    {
+        float pitch_cos = cosf(camera_pitch);
+        float look_x = fx * pitch_cos;
+        float look_y = sinf(camera_pitch);
+        float look_z = fz * pitch_cos;
+
+        set_3d_camera(
+            player_x,
+            1.58f + sinf(walk_bob) * 0.012f,
+            player_z,
+            player_x + look_x * 18.0f,
+            1.58f + look_y * 18.0f,
+            player_z + look_z * 18.0f
+        );
+        return;
+    }
+
+    {
+        float distance;
+
+        for (distance = 5.2f; distance > 0.8f; distance -= 0.4f)
+        {
+            eye_x = player_x - fx * distance;
+            eye_z = player_z - fz * distance;
+            if (!city_camera_path_blocked(
+                    player_x, player_z, eye_x, eye_z, -1
+                ))
+                break;
+        }
+    }
+
     eye_y = 2.75f + sinf(walk_bob) * 0.025f;
-    eye_z = player_z - fz * 5.2f;
 
     set_3d_camera(
         eye_x,
@@ -2716,11 +2971,31 @@ static void update_camera_turn_input(
     if (!pad || in_vehicle)
         return;
 
-    if (pad->Buttons & PSP_CTRL_LTRIGGER)
-        player_yaw -= 0.045f;
+    if (camera_first_person)
+    {
+        if (pad->Buttons & PSP_CTRL_LEFT)
+            player_yaw -= 0.045f;
+        if (pad->Buttons & PSP_CTRL_RIGHT)
+            player_yaw += 0.045f;
+        if (pad->Buttons & PSP_CTRL_UP)
+            camera_pitch += 0.025f;
+        if (pad->Buttons & PSP_CTRL_DOWN)
+            camera_pitch -= 0.025f;
+        if (pad->Buttons & PSP_CTRL_LTRIGGER)
+            player_yaw -= 0.045f;
+        if (pad->Buttons & PSP_CTRL_RTRIGGER)
+            player_yaw += 0.045f;
 
-    if (pad->Buttons & PSP_CTRL_RTRIGGER)
-        player_yaw += 0.045f;
+        if (camera_pitch < -0.78f) camera_pitch = -0.78f;
+        if (camera_pitch > 0.78f) camera_pitch = 0.78f;
+    }
+    else
+    {
+        if (pad->Buttons & PSP_CTRL_LTRIGGER)
+            player_yaw -= 0.045f;
+        if (pad->Buttons & PSP_CTRL_RTRIGGER)
+            player_yaw += 0.045f;
+    }
 
     while (player_yaw > PI_F)
         player_yaw -= 2.0f * PI_F;
@@ -2903,6 +3178,42 @@ static int nearest_vehicle(void)
     return best;
 }
 
+static void exit_current_vehicle(void)
+{
+    if (current_vehicle >= 0 && current_vehicle < CAR_COUNT)
+    {
+        CityCar *c = &cars[current_vehicle];
+        int side;
+        int placed = 0;
+
+        for (side = 1; side >= -1; side -= 2)
+        {
+            float x = c->x + cosf(c->yaw) * 1.75f * (float)side;
+            float z = c->z + sinf(c->yaw) * 1.75f * (float)side;
+
+            if (!city_point_blocked(x, z, 0.48f, current_vehicle))
+            {
+                player_x = x;
+                player_z = z;
+                placed = 1;
+                break;
+            }
+        }
+
+        if (!placed)
+        {
+            player_x = c->x + sinf(c->yaw) * 3.0f;
+            player_z = c->z - cosf(c->yaw) * 3.0f;
+        }
+
+        player_yaw = c->yaw;
+    }
+
+    in_vehicle = 0;
+    current_vehicle = -1;
+    clamp_world_position(&player_x, &player_z);
+}
+
 static void move_walker(
     const SceCtrlData *pad
 )
@@ -2921,16 +3232,16 @@ static void move_walker(
         ((float)pad->Ly - 128.0f) /
         127.0f;
 
-    if (pad->Buttons & PSP_CTRL_LEFT)
+    if (!camera_first_person && (pad->Buttons & PSP_CTRL_LEFT))
         lx = -1.0f;
 
-    if (pad->Buttons & PSP_CTRL_RIGHT)
+    if (!camera_first_person && (pad->Buttons & PSP_CTRL_RIGHT))
         lx = 1.0f;
 
-    if (pad->Buttons & PSP_CTRL_UP)
+    if (!camera_first_person && (pad->Buttons & PSP_CTRL_UP))
         ly = -1.0f;
 
-    if (pad->Buttons & PSP_CTRL_DOWN)
+    if (!camera_first_person && (pad->Buttons & PSP_CTRL_DOWN))
         ly = 1.0f;
 
     mag =
@@ -2939,11 +3250,16 @@ static void move_walker(
     if (mag < 0.18f)
     {
         walk_bob *= 0.90f;
+        footstep_frames = 0;
         return;
     }
 
     if (mag > 1.0f)
+    {
+        lx /= mag;
+        ly /= mag;
         mag = 1.0f;
+    }
 
     {
         const float forward_x = sinf(player_yaw);
@@ -2955,8 +3271,21 @@ static void move_walker(
         move_x = forward_x * (-ly) + right_x * lx;
         move_z = forward_z * (-ly) + right_z * lx;
 
-        player_x += move_x * speed;
-        player_z += move_z * speed;
+        if (!city_point_blocked(
+                player_x + move_x * speed,
+                player_z,
+                0.48f,
+                -1
+            ))
+            player_x += move_x * speed;
+
+        if (!city_point_blocked(
+                player_x,
+                player_z + move_z * speed,
+                0.48f,
+                -1
+            ))
+            player_z += move_z * speed;
 
         clamp_world_position(
             &player_x,
@@ -2967,6 +3296,13 @@ static void move_walker(
 
         if (walk_bob > 6.2831853f)
             walk_bob -= 6.2831853f;
+
+        ++footstep_frames;
+        if (footstep_frames >= 24)
+        {
+            queue_footstep();
+            footstep_frames = 0;
+        }
     }
 }
 
@@ -3028,15 +3364,18 @@ static void update_car(
     forward_z =
         -cosf(c->yaw);
 
-    c->x +=
-        forward_x *
-        c->speed *
-        0.10f;
+    {
+        float next_x = c->x + forward_x * c->speed * 0.10f;
+        float next_z = c->z + forward_z * c->speed * 0.10f;
 
-    c->z +=
-        forward_z *
-        c->speed *
-        0.10f;
+        if (city_point_blocked(next_x, next_z, 1.25f, current_vehicle))
+            c->speed = 0.0f;
+        else
+        {
+            c->x = next_x;
+            c->z = next_z;
+        }
+    }
 
     clamp_world_position(
         &c->x,
@@ -3046,39 +3385,6 @@ static void update_car(
     player_x = c->x;
     player_z = c->z;
     player_yaw = c->yaw;
-}
-
-static void update_brother_follow(void)
-{
-    float dx =
-        player_x -
-        brother_x;
-
-    float dz =
-        player_z -
-        brother_z;
-
-    float d2 =
-        dx * dx +
-        dz * dz;
-
-    if (d2 > 6.0f)
-    {
-        brother_x +=
-            dx * 0.025f;
-
-        brother_z +=
-            dz * 0.025f;
-    }
-
-    if (fabsf(dx) + fabsf(dz) > 0.1f)
-    {
-        brother_yaw =
-            atan2f(
-                dx,
-                -dz
-            );
-    }
 }
 
 static void update_pedestrians(void)
@@ -3385,6 +3691,8 @@ static void begin_world_3d(
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     sceGuDepthMask(GU_FALSE);
+    sceGuClearDepth(0);
+    sceGuClear(GU_DEPTH_BUFFER_BIT);
     sceGuShadeModel(GU_FLAT);
     sceGuFog(
         32.0f,
@@ -3408,6 +3716,8 @@ static void begin_player_world_3d(void)
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     sceGuDepthMask(GU_FALSE);
+    sceGuClearDepth(0);
+    sceGuClear(GU_DEPTH_BUFFER_BIT);
     sceGuShadeModel(GU_FLAT);
     sceGuFog(
         32.0f,
@@ -3437,8 +3747,8 @@ static void render_sunset_sky(void)
     sceGuDisable(GU_BLEND);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_FOG);
-    /* The sky is a 2D backdrop; it must never write depth for the 3D scene. */
-    sceGuDepthMask(GU_TRUE);
+    /* The sky is a 2D backdrop, drawn with depth testing disabled. */
+    sceGuDepthMask(GU_FALSE);
     sceGuShadeModel(GU_SMOOTH);
 
     v = (SkyVertex *)sceGuGetMemory(4 * sizeof(SkyVertex));
@@ -3456,14 +3766,6 @@ static void render_sunset_sky(void)
     );
     sceGuShadeModel(GU_FLAT);
 
-    /* Start the world with a clean depth buffer after drawing the backdrop.
-     * This avoids stale 2D depth values hiding all city geometry on PSP GU
-     * implementations that preserve depth state across 2D draws. */
-    sceGuClearDepth(0);
-    sceGuClear(GU_DEPTH_BUFFER_BIT);
-    sceGuDepthMask(GU_FALSE);
-    sceGuDepthFunc(GU_GEQUAL);
-    sceGuEnable(GU_DEPTH_TEST);
 }
 
 static void draw_scene_tone(void)
@@ -3547,6 +3849,18 @@ static void render_game_hud(
         2,
         0xffffffff
     );
+
+    if (!in_vehicle &&
+        (state == GAME_STATE_STORY || state == GAME_STATE_FREE_WORLD))
+    {
+        draw_text(
+            camera_first_person ? "SELECT 3RD  DPAD LOOK" : "SELECT 1ST  L/R LOOK",
+            153,
+            253,
+            1,
+            0xffd5e0e4
+        );
+    }
 
     if (in_vehicle)
     {
@@ -3642,6 +3956,14 @@ int psp_game_init(void)
     settings_selection = 0;
     brightness_percent = 100;
     graphics_quality = 0;
+    camera_first_person = 0;
+    camera_pitch = -0.08f;
+    wind_phase = 0.0f;
+    footstep_frames = 0;
+    click_sfx_pending = 0;
+    footstep_sfx_pending = 0;
+    music_enabled = 0;
+    ambience_enabled = 0;
     world_time_minutes = 17.0f * 60.0f;
     world_clock_ticks = sceKernelGetSystemTimeLow();
 
@@ -3689,6 +4011,10 @@ void psp_game_update(void)
 
     if (!game_initialized)
         return;
+
+    wind_phase += 0.018f;
+    if (wind_phase > 6.2831853f)
+        wind_phase -= 6.2831853f;
 
     update_world_clock();
 
@@ -3750,22 +4076,9 @@ void psp_game_update(void)
 
             if (pressed & PSP_CTRL_START)
             {
-                music_stop();
-
                 if (save_exists())
-                {
                     load_game();
-
-                    start_transition(
-                        GAME_STATE_MAIN_MENU
-                    );
-                }
-                else
-                {
-                    start_transition(
-                        GAME_STATE_LANGUAGE
-                    );
-                }
+                start_transition(GAME_STATE_MAIN_MENU);
             }
 
             break;
@@ -3829,32 +4142,34 @@ void psp_game_update(void)
 
             if (pressed & PSP_CTRL_UP)
             {
+                queue_ui_click();
                 if (selected_menu > 0)
                     --selected_menu;
             }
 
             if (pressed & PSP_CTRL_DOWN)
             {
+                queue_ui_click();
                 if (selected_menu < 3)
                     ++selected_menu;
             }
 
             if (pressed & PSP_CTRL_CROSS)
             {
+                queue_ui_click();
                 switch (selected_menu)
                 {
                     case 0:
-                        player_x = -10.6f;
-                        player_z = 9.1f;
-                        player_yaw = PI_F;
-                        brother_x = -14.8f;
-                        brother_z = 10.8f;
+                        player_x = 0.0f;
+                        player_z = 2.0f;
+                        player_yaw = 0.0f;
                         story_step = 0;
                         in_vehicle = 0;
                         current_vehicle = -1;
+                        camera_first_person = 0;
 
                         start_transition(
-                            GAME_STATE_STORY_INTRO
+                            GAME_STATE_STORY
                         );
                         break;
 
@@ -3864,6 +4179,7 @@ void psp_game_update(void)
                         player_yaw = 0.0f;
                         in_vehicle = 0;
                         current_vehicle = -1;
+                        camera_first_person = 0;
 
                         start_transition(
                             GAME_STATE_FREE_WORLD
@@ -3881,6 +4197,7 @@ void psp_game_update(void)
 
                         in_vehicle = 0;
                         current_vehicle = -1;
+                        camera_first_person = 0;
 
                         start_transition(
                             GAME_STATE_MULTIPLAYER
@@ -3901,15 +4218,19 @@ void psp_game_update(void)
 
         case GAME_STATE_STORY:
 
+            if (!in_vehicle && (pressed & PSP_CTRL_SELECT))
+            {
+                camera_first_person = !camera_first_person;
+                camera_pitch = 0.0f;
+                queue_ui_click();
+            }
+
             update_camera_turn_input(&pad);
 
             if (in_vehicle)
                 update_car(&pad);
             else
                 move_walker(&pad);
-
-            update_brother_follow();
-            update_pedestrians();
 
             /*
              * Enter/exit the nearest peaceful city car.
@@ -3918,8 +4239,7 @@ void psp_game_update(void)
             {
                 if (in_vehicle)
                 {
-                    in_vehicle = 0;
-                    current_vehicle = -1;
+                    exit_current_vehicle();
                 }
                 else
                 {
@@ -3930,6 +4250,7 @@ void psp_game_update(void)
                     {
                         current_vehicle = nearest;
                         in_vehicle = 1;
+                        camera_first_person = 0;
 
                         cars[nearest].speed =
                             0.0f;
@@ -3947,7 +4268,7 @@ void psp_game_update(void)
                     player_x - 0.0f;
 
                 float dz =
-                    player_z - 82.0f;
+                    player_z - (-68.0f);
 
                 if (dx * dx + dz * dz <
                     11.0f * 11.0f)
@@ -3970,6 +4291,13 @@ void psp_game_update(void)
 
         case GAME_STATE_FREE_WORLD:
 
+            if (!in_vehicle && (pressed & PSP_CTRL_SELECT))
+            {
+                camera_first_person = !camera_first_person;
+                camera_pitch = 0.0f;
+                queue_ui_click();
+            }
+
             update_camera_turn_input(&pad);
 
             if (in_vehicle)
@@ -3983,8 +4311,7 @@ void psp_game_update(void)
             {
                 if (in_vehicle)
                 {
-                    in_vehicle = 0;
-                    current_vehicle = -1;
+                    exit_current_vehicle();
                 }
                 else
                 {
@@ -3995,6 +4322,7 @@ void psp_game_update(void)
                     {
                         current_vehicle = nearest;
                         in_vehicle = 1;
+                        camera_first_person = 0;
 
                         cars[nearest].speed =
                             0.0f;
@@ -4031,9 +4359,14 @@ void psp_game_update(void)
                 if (fabsf(lx) > 0.18f ||
                     fabsf(ly) > 0.18f)
                 {
+                    float next_x = player_x + lx * 0.17f;
+                    float next_z = player_z + ly * 0.17f;
+
                     player_yaw = atan2f(lx, -ly);
-                    player_x += lx * 0.17f;
-                    player_z += ly * 0.17f;
+                    if (!city_point_blocked(next_x, player_z, 0.48f, -1))
+                        player_x = next_x;
+                    if (!city_point_blocked(player_x, next_z, 0.48f, -1))
+                        player_z = next_z;
 
                     clamp_world_position(
                         &player_x,
@@ -4047,25 +4380,29 @@ void psp_game_update(void)
              */
             if (pad.Buttons & PSP_CTRL_LEFT)
             {
-                player2_x -= 0.17f;
+                if (!city_point_blocked(player2_x - 0.17f, player2_z, 0.48f, -1))
+                    player2_x -= 0.17f;
                 player2_yaw = -PI_F * 0.5f;
             }
 
             if (pad.Buttons & PSP_CTRL_RIGHT)
             {
-                player2_x += 0.17f;
+                if (!city_point_blocked(player2_x + 0.17f, player2_z, 0.48f, -1))
+                    player2_x += 0.17f;
                 player2_yaw = PI_F * 0.5f;
             }
 
             if (pad.Buttons & PSP_CTRL_UP)
             {
-                player2_z -= 0.17f;
+                if (!city_point_blocked(player2_x, player2_z - 0.17f, 0.48f, -1))
+                    player2_z -= 0.17f;
                 player2_yaw = 0.0f;
             }
 
             if (pad.Buttons & PSP_CTRL_DOWN)
             {
-                player2_z += 0.17f;
+                if (!city_point_blocked(player2_x, player2_z + 0.17f, 0.48f, -1))
+                    player2_z += 0.17f;
                 player2_yaw = PI_F;
             }
 
@@ -4102,15 +4439,20 @@ void psp_game_update(void)
 
             if (pressed & PSP_CTRL_UP)
             {
+                queue_ui_click();
                 if (settings_selection > 0)
                     --settings_selection;
             }
 
             if (pressed & PSP_CTRL_DOWN)
             {
+                queue_ui_click();
                 if (settings_selection < 2)
                     ++settings_selection;
             }
+
+            if (pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT | PSP_CTRL_CROSS))
+                queue_ui_click();
 
             if (settings_selection == 0)
             {
@@ -4543,22 +4885,6 @@ void psp_game_render(void)
                 MainMenu_start
             );
 
-            /* Replace the old year in the baked logo with the new game title. */
-            draw_rect_2d(
-                103,
-                79,
-                80,
-                29,
-                0xdd090a0d
-            );
-            draw_text(
-                "GTA",
-                116,
-                83,
-                3,
-                0xffe0b66b
-            );
-
             /*
              * Underline selection without hiding text.
              */
@@ -4608,20 +4934,10 @@ void psp_game_render(void)
 
             render_city_world();
 
-            if (!in_vehicle)
+            if (!in_vehicle && !camera_first_person)
             {
                 draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
-                draw_human_pose(brother_x, 0.0f, brother_z, brother_yaw, 0xff4c6078, walk_bob * 0.85f);
             }
-
-            /* Third cousin remains near the house after the intro. */
-            draw_human(
-                -10.5f,
-                0.0f,
-                12.0f,
-                0.0f,
-                0xff9a6a49
-            );
 
             draw_scene_tone();
             render_game_hud(
@@ -4642,7 +4958,7 @@ void psp_game_render(void)
 
             render_city_world();
 
-            if (!in_vehicle)
+            if (!in_vehicle && !camera_first_person)
                 draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
 
             draw_scene_tone();
@@ -4664,7 +4980,8 @@ void psp_game_render(void)
 
             render_city_world();
 
-            draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
+            if (!camera_first_person)
+                draw_human_pose(player_x, 0.0f, player_z, player_yaw, 0xff536b78, walk_bob);
 
             draw_human_pose(
                 player2_x,
@@ -4729,7 +5046,7 @@ void psp_game_render(void)
                 );
                 draw_text("X CONFIRM", 344, 178, 2, 0xffe0b66b);
 
-                draw_text("MUSIC PLAYS WHILE RIDING", 32, 222, 2, 0xffcbd8dd);
+                draw_text("MENU MUSIC + CAR RADIO", 32, 222, 2, 0xffcbd8dd);
                 draw_text("UP DOWN MOVE  LEFT RIGHT ADJUST", 32, 244, 1, 0xff9eb0ba);
                 draw_text("X SELECT/RESET", 326, 244, 1, 0xffe0b66b);
                 draw_text("O BACK", 405, 244, 1, 0xfff0f1ed);
