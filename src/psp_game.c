@@ -38,7 +38,7 @@
  * -> player takes control -> walk together through Peine -> bridge
  *
  * Music:
- * plays only while the player is inside and driving a vehicle
+ * main menu theme and while the player is inside a vehicle
  */
 
 extern const unsigned char Title_start[];
@@ -633,7 +633,8 @@ static void draw_textured_triangles(
 {
     bind_world_texture(texture_id);
 
-    sceGuDrawArray(
+    /* Flush the pending GUM camera/model matrices before GE transforms. */
+    sceGumDrawArray(
         GU_TRIANGLES,
         GU_TEXTURE_16BIT |
         GU_COLOR_8888 |
@@ -929,7 +930,8 @@ static void draw_shadow_blob(float x, float z, float sx, float sz)
         v[n+2].color=0x60000000; v[n+2].x=x+cosf(a1)*sx;   v[n+2].y=0.02f; v[n+2].z=z+sinf(a1)*sz;
     }
 
-    sceGuDrawArray(
+    /* This mesh uses the active 3D camera and model transform as well. */
+    sceGumDrawArray(
         GU_TRIANGLES,
         GU_COLOR_8888 |
         GU_VERTEX_32BITF |
@@ -2504,13 +2506,13 @@ static int is_driveable_gameplay_state(void)
            state == GAME_STATE_FREE_WORLD;
 }
 
-/* The music follows the player's vehicle state, never menus or walking. */
-static void update_vehicle_music(void)
+/* Play in the main menu and while driving; keep other screens silent. */
+static void update_music_for_state(void)
 {
-    int should_play =
-        in_vehicle &&
-        current_vehicle >= 0 &&
-        is_driveable_gameplay_state();
+    int should_play = state == GAME_STATE_MAIN_MENU ||
+        (in_vehicle &&
+         current_vehicle >= 0 &&
+         is_driveable_gameplay_state());
 
     if (should_play && !music_running)
         music_start();
@@ -4147,7 +4149,7 @@ void psp_game_update(void)
             break;
     }
 
-    update_vehicle_music();
+    update_music_for_state();
 }
 
 /* ------------------------------------------------------------------------- */
