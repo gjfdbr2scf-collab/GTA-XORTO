@@ -13,7 +13,8 @@ INCDIR = include
 CFLAGS = -O2 -G0 -Wall
 ASFLAGS = $(CFLAGS)
 
-LIBS = -lpsputility -lpspvaudio -lpspaudio -lpspgum -lpspgu -lpspdisplay -lpspctrl -lpspdebug
+LIBS = -lpsputility -lpspvaudio -lpspaudio -lpspgum -lpspgu -lpspdisplay -lpspctrl -lpspdebug \
+       -lpspnet_adhocctl -lpspnet_adhoc -lpspnet
 
 EXTRA_TARGETS = EBOOT.PBP
 
