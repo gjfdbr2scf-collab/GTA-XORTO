@@ -266,7 +266,6 @@ static float camera_pitch = -0.08f;
 static float walk_bob = 0.0f;
 
 static float brother_x = -2.0f;
-static float brother_y = 0.0f;
 static float brother_z = 4.5f;
 static float brother_yaw = 0.0f;
 
@@ -3439,7 +3438,7 @@ static void draw_text(
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_TEXTURE_32BIT |
+        GU_TEXTURE_16BIT |
         GU_COLOR_8888 |
         GU_VERTEX_16BIT |
         GU_TRANSFORM_2D,
@@ -5451,7 +5450,7 @@ static int online_begin(void)
     online_adhoc_initialized = 1;
 
     memset(&product, 0, sizeof(product));
-    strncpy(product.product, ONLINE_GAME_ID, sizeof(product.product) - 1);
+    memcpy(product.product, ONLINE_GAME_ID, sizeof(ONLINE_GAME_ID));
 
     result = sceNetAdhocctlInit(0x2000, 0x30, &product);
     if (result < 0)
