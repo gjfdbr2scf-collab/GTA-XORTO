@@ -5128,10 +5128,22 @@ static void draw_scene_tone(void)
 static void draw_world_clock(void)
 {
     char clock_text[6];
-    int hour = ((int)world_time_minutes / 60) % 24;
-    int minute = (int)world_time_minutes % 60;
+    int total_minutes = (int)world_time_minutes % 1440;
+    int hour;
+    int minute;
 
-    snprintf(clock_text, sizeof(clock_text), "%02d:%02d", hour, minute);
+    if (total_minutes < 0)
+        total_minutes += 1440;
+
+    hour = total_minutes / 60;
+    minute = total_minutes % 60;
+
+    clock_text[0] = (char)('0' + hour / 10);
+    clock_text[1] = (char)('0' + hour % 10);
+    clock_text[2] = ':';
+    clock_text[3] = (char)('0' + minute / 10);
+    clock_text[4] = (char)('0' + minute % 10);
+    clock_text[5] = '\0';
     draw_text(clock_text, 414, 18, 2, 0xffffffff);
 }
 
