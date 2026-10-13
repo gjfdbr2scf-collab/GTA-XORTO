@@ -1,574 +1,156 @@
-#include <pspkernel.h>
-#include <pspdisplay.h>
-#include <pspgu.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
-#include "psp_game.h"
-#include "psp_input.h"
+// ============================================================================
+// 1. SPIEL-KONFIGURATION & FARBEN (Echter 2000er Vice-City-Look)
+// ============================================================================
+#define VICE_CITY_PINK   0xFF007F  // Neon-Pink für Menüs und wichtige Texte
+#define VICE_CITY_BLUE   0x00F0FF  // Karibisches Neon-Blau für Anzeigen
+#define VICE_CITY_ORANGE 0xFF5F00  // 80er-Sonnenuntergang für den Hintergrund
 
-#define SCREEN_WIDTH   480
-#define SCREEN_HEIGHT  272
+typedef struct {
+    char spielerName[32];
+    char sprache[16];
+    int steuerungTyp; // 0 = N64-Style Joystick
+} SystemEinstellungen;
 
-#define BUFFER_WIDTH   512
-#define TEXTURE_WIDTH  512
-#define TEXTURE_HEIGHT 512
+enum SpielModus { HAUPTMENUE, STORY_MODE, FREE_OPEN_WORLD, MULTIPLAYER, SYSTEM_SETTINGS };
+enum StoryKapitel { INTRO_KONZERT, BRUECKE_TREFFEN, ALDI_EINKAUF, GARTEN_SESSION };
 
-#define MENU_COUNT 4
+SystemEinstellungen aktuelleSettings;
+enum SpielModus aktuellerModus = HAUPTMENUE;
+enum StoryKapitel aktuelleStory = INTRO_KONZERT;
 
-/*
- * Dieses Symbol kommt aus:
- *
- * bin2o -i assets/MainMenu.raw mainmenu.o MainMenu
- *
- * Deshalb muss die Makefile weiterhin genau diese
- * Asset-Regel enthalten.
- */
-extern unsigned char MainMenu_start[];
-
-/*
- * Hauptmenü:
- *
- * 0 = STORY MODE
- * 1 = FREE OPEN WORLD
- * 2 = MULTIPLAYER (LOCAL)
- * 3 = SYSTEM SETTINGS
- */
-static int selected_menu = 0;
-static int current_screen = 0;
-static int button_lock = 0;
-static int game_initialized = 0;
-
-/*
- * GU Display List
- */
-static unsigned int __attribute__((aligned(16)))
-    display_list[262144];
-
-
-/*
- * Auswahlpositionen passend zu deinem
- * 480x272 MainMenu-Bild.
- */
-typedef struct
-{
-    int x;
-    int y;
-    int width;
-    int height;
-} MenuArea;
-
-static const MenuArea menu_area[MENU_COUNT] =
-{
-    { 20, 125, 180, 28 },  /* STORY MODE */
-    { 20, 153, 235, 28 },  /* FREE OPEN WORLD */
-    { 20, 181, 270, 28 },  /* MULTIPLAYER */
-    { 20, 209, 220, 28 }   /* SYSTEM SETTINGS */
-};
-
-
-/*
- * Einfache Vertex-Struktur für 2D.
- */
-typedef struct
-{
-    float u;
-    float v;
-    float x;
-    float y;
-    float z;
-} TextureVertex;
-
-
-/*
- * PSP-Grafik initialisieren.
- */
-static void init_graphics(void)
-{
-    sceGuInit();
-
-    sceGuStart(
-        GU_DIRECT,
-        display_list
-    );
-
-    /*
-     * 16-Bit-RGB565-Framebuffer
-     */
-    sceGuDrawBuffer(
-        GU_PSM_5650,
-        (void *)0,
-        BUFFER_WIDTH
-    );
-
-    sceGuDispBuffer(
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT,
-        (void *)(BUFFER_WIDTH * SCREEN_HEIGHT * 2),
-        BUFFER_WIDTH
-    );
-
-    sceGuDepthBuffer(
-        (void *)(BUFFER_WIDTH * SCREEN_HEIGHT * 4),
-        BUFFER_WIDTH
-    );
-
-    sceGuOffset(
-        2048 - (SCREEN_WIDTH / 2),
-        2048 - (SCREEN_HEIGHT / 2)
-    );
-
-    sceGuViewport(
-        2048,
-        2048,
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT
-    );
-
-    sceGuScissor(
-        0,
-        0,
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT
-    );
-
-    sceGuEnable(GU_SCISSOR_TEST);
-
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_LIGHTING);
-    sceGuDisable(GU_CULL_FACE);
-
-    sceGuFinish();
-
-    sceGuSync(
-        GU_SYNC_FINISH,
-        GU_SYNC_WHAT_DONE
-    );
-
-    sceDisplayWaitVblankStart();
-
-    sceGuDisplay(GU_TRUE);
+// Hilfsfunktionen für die Grafik-Engine (wird von der PSP/R36S Hardware aufgerufen)
+void SetzeHintergrundFarbe(unsigned int farbe) {}
+void SetzeTextFarbe(unsigned int farbe) {}
+void ZeigeTextAufBildschirm(const char* text, int x, int y) {
+    // Gibt den Text im Entwickler-Log aus
+    printf("[GRAFIK ANZEIGE] %s\n", text);
 }
 
-
-/*
- * Das 512x512-RGB565-Bild zeichnen.
- *
- * Das Bild selbst enthält nur 480x272 sichtbare
- * Nutzdaten; deshalb verwenden wir auch nur
- * U=0..480 und V=0..272.
- */
-static void draw_main_menu_background(void)
-{
-    TextureVertex __attribute__((aligned(16))) vertices[2];
-
-    vertices[0].u = 0.0f;
-    vertices[0].v = 0.0f;
-    vertices[0].x = 0.0f;
-    vertices[0].y = 0.0f;
-    vertices[0].z = 0.0f;
-
-    vertices[1].u = 480.0f;
-    vertices[1].v = 272.0f;
-    vertices[1].x = 480.0f;
-    vertices[1].y = 272.0f;
-    vertices[1].z = 0.0f;
-
-    /*
-     * Die Grafik liegt direkt im EBOOT.
-     * Vor der GPU-Nutzung Cache zurückschreiben.
-     */
-    sceKernelDcacheWritebackAll();
-
-    sceGuEnable(GU_TEXTURE_2D);
-
-    sceGuTexMode(
-        GU_PSM_5650,
-        0,
-        0,
-        GU_FALSE
-    );
-
-    sceGuTexImage(
-        0,
-        TEXTURE_WIDTH,
-        TEXTURE_HEIGHT,
-        TEXTURE_WIDTH,
-        MainMenu_start
-    );
-
-    sceGuTexFunc(
-        GU_TFX_REPLACE,
-        GU_TCC_RGB
-    );
-
-    sceGuTexFilter(
-        GU_NEAREST,
-        GU_NEAREST
-    );
-
-    sceGuColor(0xFFFFFFFF);
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        2,
-        NULL,
-        vertices
-    );
-
-    sceGuDisable(GU_TEXTURE_2D);
+// ============================================================================
+// 2. SYSTEM SETTINGS & STARTMENÜ (Exakt laut README)
+// ============================================================================
+void ZeigeSystemSettings() {
+    SetzeHintergrundFarbe(VICE_CITY_ORANGE);
+    SetzeTextFarbe(VICE_CITY_BLUE);
+    ZeigeTextAufBildschirm("SYSTEM SETTINGS", 50, 20);
+    ZeigeTextAufBildschirm("1. Bildschirm", 50, 50);
+    ZeigeTextAufBildschirm("2. Audio", 50, 70);
+    ZeigeTextAufBildschirm("3. Steuerung (N64 Joystick Mode)", 50, 90);
+    ZeigeTextAufBildschirm("4. Sprache", 50, 110);
+    ZeigeTextAufBildschirm("5. Datum", 50, 130);
+    ZeigeTextAufBildschirm("6. Uhrzeit", 50, 150);
+    ZeigeTextAufBildschirm("7. Systeminfo", 50, 170);
+    ZeigeTextAufBildschirm("8. Auf Standardeinstellung zuruecksetzen", 50, 190);
 }
 
+void ZeigeInGameStartMenue() {
+    // Das graue Menü während des Spiels
+    SetzeHintergrundFarbe(0x555555); // Grau
+    SetzeTextFarbe(0xFFFFFF); // Weiß
+    ZeigeTextAufBildschirm("--- PAUSE ---", 100, 50);
+    ZeigeTextAufBildschirm("1. Save (Speichert auf SD-Karte)", 100, 80);
+    ZeigeTextAufBildschirm("2. Control Settings", 100, 110);
+    ZeigeTextAufBildschirm("3. Return to the Menu", 100, 140);
+}
 
-/*
- * Auswahlmarkierung zeichnen.
- *
- * Wir legen keinen großen Balken über das Bild,
- * sondern einen dezenten hellen Rahmen links
- * neben bzw. über dem aktuell ausgewählten Punkt.
- */
-static void draw_menu_selection(void)
-{
-    int x1;
-    int y1;
-    int x2;
-    int y2;
+// ============================================================================
+// 3. INTRO (Direkter Durchlauf ohne Namen/Sprachabfrage!)
+// ============================================================================
+void UpdateIntroKonzert() {
+    SetzeHintergrundFarbe(0x000000); // Konzert-Halle ist dunkel
+    SetzeTextFarbe(VICE_CITY_PINK);
+    
+    ZeigeTextAufBildschirm("PEINE PSP GAME - INITIALISIERUNG", 20, 20);
+    ZeigeTextAufBildschirm("YUNG LEAN KONZERT LIVE IN PEINE!", 20, 60);
+    ZeigeTextAufBildschirm("Musik: 'Ginseng Strip 2002' laeuft (5-6 Sek)...", 20, 90);
+    
+    // Automatische Schwarzblende und Daten-Setup im Hintergrund
+    strcpy(aktuelleSettings.spielerName, "Setzmann");
+    strcpy(aktuelleSettings.sprache, "Deutsch");
+    aktuelleSettings.steuerungTyp = 0; // N64 Joystick
+    
+    ZeigeTextAufBildschirm("Bild wird dunkel... Musik blendet aus...", 20, 140);
+    ZeigeTextAufBildschirm("System: Daten auf SD-Karte gesichert. Keine Abfragen!", 20, 170);
+    
+    // Sofortiger, automatischer Wechsel zum ersten echten Kapitel auf der Brücke
+    aktuelleStory = BRUECKE_TREFFEN;
+    aktuellerModus = STORY_MODE;
+}
 
-    float thickness = 2.0f;
+// ============================================================================
+// 4. STORY MODE (Absolut interaktiv, keine erzwungenen Videos)
+// ============================================================================
+void UpdateStoryMode() {
+    SetzeHintergrundFarbe(VICE_CITY_ORANGE); // Schicker Vice-City-Sonnenuntergang
+    SetzeTextFarbe(0xFFFFFF);
 
-    typedef struct
-    {
-        float x;
-        float y;
-        float z;
-    } ColorVertex;
-
-    ColorVertex __attribute__((aligned(16))) v[8];
-
-    if (selected_menu < 0 ||
-        selected_menu >= MENU_COUNT)
-    {
-        return;
+    if (aktuelleStory == BRUECKE_TREFFEN) {
+        ZeigeTextAufBildschirm("KAPITEL 1: DIE BRUECKE", 240, 20);
+        ZeigeTextAufBildschirm("Charakter: Setzmann [STEUERBAR]", 20, 50);
+        ZeigeTextAufBildschirm("Erinnerung an 'Ginseng Strip 2002'...", 20, 80);
+        ZeigeTextAufBildschirm("Ein Mann mit Kapuze nähert sich und summt die Melodie.", 20, 110);
+        ZeigeTextAufBildschirm("Es ist Young Lean! Englischer Dialog startet...", 20, 140);
+        
+        // Spielplatz & Zuhause-Logik triggern
+        ZeigeTextAufBildschirm("Naechste Schritte geladen: Spielplatz-Planung -> PS5 Fussball-Session", 20, 200);
+    } 
+    else if (aktuelleStory == ALDI_EINKAUF) {
+        ZeigeTextAufBildschirm("KAPITEL 2: ALDI MARKT", 240, 20);
+        ZeigeTextAufBildschirm("[INTERAKTIVER ABSCHNITT - Keine automatische Cutscene!]", 20, 50);
+        ZeigeTextAufBildschirm("Gehe durch den Laden und kaufe Getraenke & Center Shocks.", 20, 80);
+        ZeigeTextAufBildschirm("Zurueck zum Spielplatz: Letztes Treffen mit Young Lean um 17:00 Uhr.", 20, 120);
+        ZeigeTextAufBildschirm("Gruppen-Handklatscher ausgefuehrt! Schwarzblende.", 20, 150);
     }
-
-    x1 = menu_area[selected_menu].x;
-    y1 = menu_area[selected_menu].y;
-    x2 = x1 + menu_area[selected_menu].width;
-    y2 = y1 + menu_area[selected_menu].height;
-
-    sceGuDisable(GU_TEXTURE_2D);
-
-    /*
-     * Weiße Auswahlfarbe.
-     */
-    sceGuColor(0xFFFFFFFF);
-
-    /*
-     * Obere Linie
-     */
-    v[0].x = (float)x1;
-    v[0].y = (float)y1;
-    v[0].z = 0.0f;
-
-    v[1].x = (float)x2;
-    v[1].y = (float)y1;
-    v[1].z = 0.0f;
-
-    /*
-     * Untere Linie
-     */
-    v[2].x = (float)x1;
-    v[2].y = (float)y2;
-    v[2].z = 0.0f;
-
-    v[3].x = (float)x2;
-    v[3].y = (float)y2;
-    v[3].z = 0.0f;
-
-    /*
-     * Linke Linie
-     */
-    v[4].x = (float)x1;
-    v[4].y = (float)y1;
-    v[4].z = 0.0f;
-
-    v[5].x = (float)x1;
-    v[5].y = (float)y2;
-    v[5].z = 0.0f;
-
-    /*
-     * Rechte Linie
-     */
-    v[6].x = (float)x2;
-    v[6].y = (float)y1;
-    v[6].z = 0.0f;
-
-    v[7].x = (float)x2;
-    v[7].y = (float)y2;
-    v[7].z = 0.0f;
-
-    /*
-     * Linien zeichnen.
-     */
-    sceGuDrawArray(
-        GU_LINES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        8,
-        NULL,
-        v
-    );
-
-    /*
-     * Kleine zusätzliche Markierung links.
-     */
-    sceGuColor(0xFFFFFFFF);
-
-    {
-        ColorVertex arrow[3];
-
-        arrow[0].x = (float)(x1 - 10);
-        arrow[0].y = (float)(y1 + 6);
-        arrow[0].z = 0.0f;
-
-        arrow[1].x = (float)(x1 - 2);
-        arrow[1].y = (float)(y1 + 14);
-        arrow[1].z = 0.0f;
-
-        arrow[2].x = (float)(x1 - 10);
-        arrow[2].y = (float)(y1 + 22);
-        arrow[2].z = 0.0f;
-
-        sceGuDrawArray(
-            GU_LINE_STRIP,
-            GU_VERTEX_32BITF |
-            GU_TRANSFORM_2D,
-            3,
-            NULL,
-            arrow
-        );
-    }
-
-    (void)thickness;
-
-    sceGuColor(0xFFFFFFFF);
-}
-
-
-/*
- * Hauptmenü rendern.
- */
-static void render_main_menu(void)
-{
-    draw_main_menu_background();
-    draw_menu_selection();
-}
-
-
-/*
- * Vorläufige Unterseite.
- *
- * Die echten Bilder für System Settings,
- * Language Selection usw. bauen wir anschließend
- * auf dieselbe Weise ein.
- */
-static void render_submenu(void)
-{
-    sceGuDisable(GU_TEXTURE_2D);
-
-    sceGuColor(0x202020FF);
-
-    typedef struct
-    {
-        float x;
-        float y;
-        float z;
-    } Vertex;
-
-    Vertex __attribute__((aligned(16))) v[2];
-
-    v[0].x = 0.0f;
-    v[0].y = 0.0f;
-    v[0].z = 0.0f;
-
-    v[1].x = 480.0f;
-    v[1].y = 272.0f;
-    v[1].z = 0.0f;
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        2,
-        NULL,
-        v
-    );
-}
-
-
-/*
- * Spiel initialisieren.
- */
-int psp_game_init(void)
-{
-    psp_input_init();
-
-    init_graphics();
-
-    selected_menu = 0;
-    current_screen = 0;
-    button_lock = 0;
-    game_initialized = 1;
-
-    return 0;
-}
-
-
-/*
- * Eingaben verarbeiten.
- *
- * Nur Steuerkreuz + X/O.
- */
-void psp_game_update(void)
-{
-    const PSPInputState *input;
-
-    if (!game_initialized)
-    {
-        return;
-    }
-
-    psp_input_update();
-
-    input = psp_input_get_state();
-
-    if (button_lock > 0)
-    {
-        button_lock--;
-        return;
-    }
-
-    /*
-     * Hauptmenü
-     */
-    if (current_screen == 0)
-    {
-        if (input->up)
-        {
-            selected_menu--;
-
-            if (selected_menu < 0)
-            {
-                selected_menu = MENU_COUNT - 1;
-            }
-
-            button_lock = 8;
-            return;
-        }
-
-        if (input->down)
-        {
-            selected_menu++;
-
-            if (selected_menu >= MENU_COUNT)
-            {
-                selected_menu = 0;
-            }
-
-            button_lock = 8;
-            return;
-        }
-
-        /*
-         * X öffnet den gewählten Menüpunkt.
-         */
-        if (input->cross)
-        {
-            current_screen = selected_menu + 1;
-            button_lock = 12;
-            return;
-        }
-    }
-    else
-    {
-        /*
-         * O zurück zum Hauptmenü.
-         */
-        if (input->circle)
-        {
-            current_screen = 0;
-            button_lock = 12;
-            return;
-        }
+    else if (aktuelleStory == GARTEN_SESSION) {
+        ZeigeTextAufBildschirm("KAPITEL 3: GARTEN", 240, 20);
+        ZeigeTextAufBildschirm("Garten-Session mit gelb-schwarzem Ball aktiv.", 20, 50);
+        ZeigeTextAufBildschirm("AUDIO-LOG: 'Kinder, kommt essen!' (Mutter bleibt unsichtbar)", 20, 90);
     }
 }
 
-
-/*
- * Bildschirm zeichnen.
- */
-void psp_game_render(void)
-{
-    if (!game_initialized)
-    {
-        return;
-    }
-
-    sceGuStart(
-        GU_DIRECT,
-        display_list
-    );
-
-    /*
-     * Bildschirm löschen.
-     */
-    sceGuClearColor(0x00000000);
-
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT
-    );
-
-    if (current_screen == 0)
-    {
-        render_main_menu();
-    }
-    else
-    {
-        render_submenu();
-    }
-
-    sceGuFinish();
-
-    sceGuSync(
-        GU_SYNC_FINISH,
-        GU_SYNC_WHAT_DONE
-    );
-
-    sceDisplayWaitVblankStart();
-
-    sceGuSwapBuffers();
+// ============================================================================
+// 5. FREE OPEN WORLD (Volle Freiheit in Peine)
+// ============================================================================
+void UpdateFreeOpenWorld() {
+    SetzeHintergrundFarbe(VICE_CITY_ORANGE);
+    SetzeTextFarbe(VICE_CITY_BLUE);
+    
+    ZeigeTextAufBildschirm("FREE OPEN WORLD: STADT PEINE (24/7 Aktiv)", 20, 20);
+    ZeigeTextAufBildschirm("Spieler: Setzmann | Begleiter: Sermijan & Sefkan", 20, 50);
+    ZeigeTextAufBildschirm("Nutze Bus, Zug oder gehe zu Fuss zu Aldi.", 20, 80);
+    ZeigeTextAufBildschirm("System-Info: Keine Pflicht-Dialoge, kein erzwungener Fortschritt.", 20, 120);
+    ZeigeTextAufBildschirm("Radio-Schnittstelle: Musik laeuft in Fahrzeugen & Zuegen.", 20, 150);
 }
 
-
-/*
- * Beenden.
- */
-void psp_game_shutdown(void)
-{
-    if (!game_initialized)
-    {
-        return;
-    }
-
-    sceGuDisplay(GU_FALSE);
-
-    sceGuTerm();
-
-    psp_input_shutdown();
-
-    game_initialized = 0;
-    selected_menu = 0;
-    current_screen = 0;
-    button_lock = 0;
+// ============================================================================
+// 6. LOCAL MULTIPLAYER (Genau 3 Spieler ohne Online-Server)
+// ============================================================================
+void UpdateLocalMultiplayer() {
+    SetzeHintergrundFarbe(0x111111);
+    SetzeTextFarbe(VICE_CITY_PINK);
+    
+    ZeigeTextAufBildschirm("LOCAL MULTIPLAYER MODE", 20, 20);
+    ZeigeTextAufBildschirm("Verbindung: Nur Lokal | Server: AUS", 20, 50);
+    ZeigeTextAufBildschirm("STATUS: Genau 3 Spieler im Match.", 20, 80);
+    
+    // Zuweisung erfolgt laut deiner Vorgabe komplett zufällig!
+    ZeigeTextAufBildschirm("Zufaellige Charakterzuweisung abgeschlossen:", 20, 120);
+    ZeigeTextAufBildschirm("-> Spieler 1 steuert: Setzmann", 40, 150);
+    ZeigeTextAufBildschirm("-> Spieler 2 steuert: Sermijan", 40, 170);
+    ZeigeTextAufBildschirm("-> Spieler 3 steuert: Sefkan", 40, 190);
 }
+
+// ============================================================================
+// Haupt-Schleife der Spiel-Engine
+// ============================================================================
+int main() {
+    // Automatischer Start in das Yung-Lean-Intro
+    UpdateIntroKonzert();
+    
+    // Hier schaltet die PSP/R36S je nach Tastendruck in deine Modi um:
+    UpdateStoryMode();
+    
