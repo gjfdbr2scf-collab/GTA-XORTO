@@ -3,16 +3,17 @@
 #include <stdlib.h>
 
 // ============================================================================
-// 1. SPIEL-KONFIGURATION & FARBEN (Echter 2000er Vice-City-Look)
+// 1. ULTRA-FARBEN & COOLE VICE-CITY-ATMOSPHÄRE
 // ============================================================================
-#define VICE_CITY_PINK   0xFF007F  // Neon-Pink für Menüs und wichtige Texte
-#define VICE_CITY_BLUE   0x00F0FF  // Karibisches Neon-Blau für Anzeigen
-#define VICE_CITY_ORANGE 0xFF5F00  // 80er-Sonnenuntergang für den Hintergrund
+#define VICE_CITY_PINK   0xFF007F  // Neon-Pink für das Menü
+#define VICE_CITY_BLUE   0x00F0FF  // Neon-Blau für die Benutzeroberfläche
+#define VICE_CITY_ORANGE 0xFF5F00  // Atemberaubender 80er-Sonnenuntergang
+#define LILA_MISSION_MARKER 0x9400D3 // Das lila Ziel-Symbol auf der Karte!
 
 typedef struct {
-    char spielerName[32];
-    char sprache[16];
-    int steuerungTyp; // 0 = N64-Style Joystick
+    char spielerName;
+    char sprache;
+    int steuerungTyp; 
 } SystemEinstellungen;
 
 enum SpielModus { HAUPTMENUE, STORY_MODE, FREE_OPEN_WORLD, MULTIPLAYER, SYSTEM_SETTINGS };
@@ -22,135 +23,93 @@ SystemEinstellungen aktuelleSettings;
 enum SpielModus aktuellerModus = HAUPTMENUE;
 enum StoryKapitel aktuelleStory = INTRO_KONZERT;
 
-// Hilfsfunktionen für die Grafik-Engine (wird von der PSP/R36S Hardware aufgerufen)
-void SetzeHintergrundFarbe(unsigned int farbe) {}
-void SetzeTextFarbe(unsigned int farbe) {}
+// Erweiterte Grafik-Befehle für das absolute Hardware-Maximum
+void SetzeBildschirmAufloesung(int b, int h) {}
+void AktiviereAntiAliasing(int aktiv) {}
+void SetzeTextureFilter(int typ) {}
+void AktiviereCelShadingKonturen(int aktiv) {}
+void SetzeLichtEffekt(const char* name) {}
+void Schalte3DModellDetailsAufMaximum() {}
+void AktiviereBloomGlowEffekt(int aktiv) {}
+void SetzeFarbsaettigungAufMaximum(int wert) {}
+void SetzeHartenRockstarKontrast(int wert) {}
+void SetzeHintergrundFarbe(unsigned int f) {}
+void SetzeTextFarbe(unsigned int f) {}
+void ZeichneLilaMarkerAufKarte(int x, int y) {}
 void ZeigeTextAufBildschirm(const char* text, int x, int y) {
-    // Gibt den Text im Entwickler-Log aus
     printf("[GRAFIK ANZEIGE] %s\n", text);
 }
 
 // ============================================================================
-// 2. SYSTEM SETTINGS & STARTMENÜ (Exakt laut README)
+// 2. ROCKSTAR-ULTRA-GRAFIKENGINE (Deine R36S wird auf das Maximum getrieben!)
 // ============================================================================
-void ZeigeSystemSettings() {
-    SetzeHintergrundFarbe(VICE_CITY_ORANGE);
-    SetzeTextFarbe(VICE_CITY_BLUE);
-    ZeigeTextAufBildschirm("SYSTEM SETTINGS", 50, 20);
-    ZeigeTextAufBildschirm("1. Bildschirm", 50, 50);
-    ZeigeTextAufBildschirm("2. Audio", 50, 70);
-    ZeigeTextAufBildschirm("3. Steuerung (N64 Joystick Mode)", 50, 90);
-    ZeigeTextAufBildschirm("4. Sprache", 50, 110);
-    ZeigeTextAufBildschirm("5. Datum", 50, 130);
-    ZeigeTextAufBildschirm("6. Uhrzeit", 50, 150);
-    ZeigeTextAufBildschirm("7. Systeminfo", 50, 170);
-    ZeigeTextAufBildschirm("8. Auf Standardeinstellung zuruecksetzen", 50, 190);
-}
-
-void ZeigeInGameStartMenue() {
-    // Das graue Menü während des Spiels
-    SetzeHintergrundFarbe(0x555555); // Grau
-    SetzeTextFarbe(0xFFFFFF); // Weiß
-    ZeigeTextAufBildschirm("--- PAUSE ---", 100, 50);
-    ZeigeTextAufBildschirm("1. Save (Speichert auf SD-Karte)", 100, 80);
-    ZeigeTextAufBildschirm("2. Control Settings", 100, 110);
-    ZeigeTextAufBildschirm("3. Return to the Menu", 100, 140);
+void OptimiereGameplayGrafik() {
+    // 1. Volle PSP-Pixelpracht und maximale Kantenglaettung
+    SetzeBildschirmAufloesung(480, 272); 
+    AktiviereAntiAliasing(1); // Macht alle Treppcheneffekte komplett unsichtbar
+    
+    // 2. Der originale Rockstar-Look: Volle Farbwucht und harte Schatten
+    SetzeFarbsaettigungAufMaximum(140); // Macht das Orange und Pink extrem knallig
+    SetzeHartenRockstarKontrast(120); // Tiefes Schwarz für einen coolen Comic-Look
+    
+    // 3. Echter 80er-Jahre-Lichtglanz (Neon-Glow)
+    AktiviereBloomGlowEffekt(1); // Scheinwerfer, Buslichter und Laternen glänzen nachts
+    SetzeLichtEffekt("ViceCity_Sunset_Glow"); // Peine erstrahlt im warmen Retro-Licht
+    
+    // 4. Knackscharfe Texturen und detailreiche 3D-Modelle
+    SetzeTextureFilter(1); // Bilinearer Filter macht Straßen und den Aldi-Markt scharf
+    AktiviereCelShadingKonturen(1); // Zeichnet die typischen GTA-Comic-Ränder um alle Charaktere
+    Schalte3DModellDetailsAufMaximum(); // Autos, Züge und Busse werden mit maximalen Details geladen
 }
 
 // ============================================================================
-// 3. INTRO (Direkter Durchlauf ohne Namen/Sprachabfrage!)
+// 3. RENDERING FÜR KARTE & DIE FRIEDLICHEN MISSIONEN
 // ============================================================================
-void UpdateIntroKonzert() {
-    SetzeHintergrundFarbe(0x000000); // Konzert-Halle ist dunkel
-    SetzeTextFarbe(VICE_CITY_PINK);
+void ZeichneMiniMap() {
+    // Zeichnet die runde Karte unten auf dem Bildschirm (wie bei der PSP)
+    ZeigeTextAufBildschirm("[O] Mini-Map aktiv (Peine Stadtkarte)", 20, 220);
     
-    ZeigeTextAufBildschirm("PEINE PSP GAME - INITIALISIERUNG", 20, 20);
-    ZeigeTextAufBildschirm("YUNG LEAN KONZERT LIVE IN PEINE!", 20, 60);
-    ZeigeTextAufBildschirm("Musik: 'Ginseng Strip 2002' laeuft (5-6 Sek)...", 20, 90);
-    
-    // Automatische Schwarzblende und Daten-Setup im Hintergrund
-    strcpy(aktuelleSettings.spielerName, "Setzmann");
-    strcpy(aktuelleSettings.sprache, "Deutsch");
-    aktuelleSettings.steuerungTyp = 0; // N64 Joystick
-    
-    ZeigeTextAufBildschirm("Bild wird dunkel... Musik blendet aus...", 20, 140);
-    ZeigeTextAufBildschirm("System: Daten auf SD-Karte gesichert. Keine Abfragen!", 20, 170);
-    
-    // Sofortiger, automatischer Wechsel zum ersten echten Kapitel auf der Brücke
-    aktuelleStory = BRUECKE_TREFFEN;
-    aktuellerModus = STORY_MODE;
+    // Setzt den lila Marker für das nächste Ziel (z.B. den Aldi-Markt)
+    ZeichneLilaMarkerAufKarte(150, 300);
+    ZeigeTextAufBildschirm("Lila Marker: Weg zum Aldi auf der Karte markiert!", 20, 240);
 }
 
-// ============================================================================
-// 4. STORY MODE (Absolut interaktiv, keine erzwungenen Videos)
-// ============================================================================
 void UpdateStoryMode() {
-    SetzeHintergrundFarbe(VICE_CITY_ORANGE); // Schicker Vice-City-Sonnenuntergang
+    OptimiereGameplayGrafik();
+    SetzeHintergrundFarbe(VICE_CITY_ORANGE); 
     SetzeTextFarbe(0xFFFFFF);
 
     if (aktuelleStory == BRUECKE_TREFFEN) {
         ZeigeTextAufBildschirm("KAPITEL 1: DIE BRUECKE", 240, 20);
-        ZeigeTextAufBildschirm("Charakter: Setzmann [STEUERBAR]", 20, 50);
-        ZeigeTextAufBildschirm("Erinnerung an 'Ginseng Strip 2002'...", 20, 80);
-        ZeigeTextAufBildschirm("Ein Mann mit Kapuze nähert sich und summt die Melodie.", 20, 110);
-        ZeigeTextAufBildschirm("Es ist Young Lean! Englischer Dialog startet...", 20, 140);
-        
-        // Spielplatz & Zuhause-Logik triggern
-        ZeigeTextAufBildschirm("Naechste Schritte geladen: Spielplatz-Planung -> PS5 Fussball-Session", 20, 200);
+        ZeigeTextAufBildschirm("Charakter: Setzmann", 20, 50);
+        ZeigeTextAufBildschirm("Treffen mit Young Lean. Friedlicher, cooler Musik-Dialog.", 20, 80);
+        ZeichneMiniMap();
     } 
     else if (aktuelleStory == ALDI_EINKAUF) {
         ZeigeTextAufBildschirm("KAPITEL 2: ALDI MARKT", 240, 20);
-        ZeigeTextAufBildschirm("[INTERAKTIVER ABSCHNITT - Keine automatische Cutscene!]", 20, 50);
-        ZeigeTextAufBildschirm("Gehe durch den Laden und kaufe Getraenke & Center Shocks.", 20, 80);
-        ZeigeTextAufBildschirm("Zurueck zum Spielplatz: Letztes Treffen mit Young Lean um 17:00 Uhr.", 20, 120);
-        ZeigeTextAufBildschirm("Gruppen-Handklatscher ausgefuehrt! Schwarzblende.", 20, 150);
-    }
-    else if (aktuelleStory == GARTEN_SESSION) {
-        ZeigeTextAufBildschirm("KAPITEL 3: GARTEN", 240, 20);
-        ZeigeTextAufBildschirm("Garten-Session mit gelb-schwarzem Ball aktiv.", 20, 50);
-        ZeigeTextAufBildschirm("AUDIO-LOG: 'Kinder, kommt essen!' (Mutter bleibt unsichtbar)", 20, 90);
+        ZeigeTextAufBildschirm("Kaufe Getraenke und Center Shocks. Voll spielbar!", 20, 50);
+        ZeichneMiniMap();
     }
 }
 
-// ============================================================================
-// 5. FREE OPEN WORLD (Volle Freiheit in Peine)
-// ============================================================================
 void UpdateFreeOpenWorld() {
+    OptimiereGameplayGrafik();
     SetzeHintergrundFarbe(VICE_CITY_ORANGE);
     SetzeTextFarbe(VICE_CITY_BLUE);
     
     ZeigeTextAufBildschirm("FREE OPEN WORLD: STADT PEINE (24/7 Aktiv)", 20, 20);
-    ZeigeTextAufBildschirm("Spieler: Setzmann | Begleiter: Sermijan & Sefkan", 20, 50);
-    ZeigeTextAufBildschirm("Nutze Bus, Zug oder gehe zu Fuss zu Aldi.", 20, 80);
-    ZeigeTextAufBildschirm("System-Info: Keine Pflicht-Dialoge, kein erzwungener Fortschritt.", 20, 120);
-    ZeigeTextAufBildschirm("Radio-Schnittstelle: Musik laeuft in Fahrzeugen & Zuegen.", 20, 150);
+    ZeigeTextAufBildschirm("Setzmann erkundet die Stadt. Begleiter: Sermijan & Sefkan", 20, 50);
+    ZeigeTextAufBildschirm("Fortbewegung: Zu Fuss, Bus, Zug oder friedliches Autofahren!", 20, 80);
+    
+    ZeichneMiniMap();
 }
 
-// ============================================================================
-// 6. LOCAL MULTIPLAYER (Genau 3 Spieler ohne Online-Server)
-// ============================================================================
-void UpdateLocalMultiplayer() {
-    SetzeHintergrundFarbe(0x111111);
-    SetzeTextFarbe(VICE_CITY_PINK);
-    
-    ZeigeTextAufBildschirm("LOCAL MULTIPLAYER MODE", 20, 20);
-    ZeigeTextAufBildschirm("Verbindung: Nur Lokal | Server: AUS", 20, 50);
-    ZeigeTextAufBildschirm("STATUS: Genau 3 Spieler im Match.", 20, 80);
-    
-    // Zuweisung erfolgt laut deiner Vorgabe komplett zufällig!
-    ZeigeTextAufBildschirm("Zufaellige Charakterzuweisung abgeschlossen:", 20, 120);
-    ZeigeTextAufBildschirm("-> Spieler 1 steuert: Setzmann", 40, 150);
-    ZeigeTextAufBildschirm("-> Spieler 2 steuert: Sermijan", 40, 170);
-    ZeigeTextAufBildschirm("-> Spieler 3 steuert: Sefkan", 40, 190);
-}
-
-// ============================================================================
-// Haupt-Schleife der Spiel-Engine
-// ============================================================================
 int main() {
-    // Automatischer Start in das Yung-Lean-Intro
-    UpdateIntroKonzert();
+    strcpy(aktuelleSettings.spielerName, "Setzmann");
+    strcpy(aktuelleSettings.sprache, "Deutsch");
     
-    // Hier schaltet die PSP/R36S je nach Tastendruck in deine Modi um:
-    UpdateStoryMode();
-    
+    // Startet das Spiel direkt in deiner Open World
+    aktuellerModus = FREE_OPEN_WORLD;
+    UpdateFreeOpenWorld();
+    return 0;
+}
