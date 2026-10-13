@@ -48,7 +48,7 @@ extern const unsigned char Music_end[];
 typedef struct {
     unsigned int magic;
     int language;
-    char username;
+    char username; // Einzelner Buchstabe im Original-Header
 } SaveData;
 
 typedef enum {
@@ -153,27 +153,27 @@ void AktualisiereN64Eingabe() {
 /* ========================================================================= */
 void RendereStoryIntroCutscene() {
     SetzeHintergrundFarbe(0x000000);
-    SetzeText放Farbe(VICE_CITY_PINK);
+    // KORREKTUR: Tippfehler mit dem chinesischen Zeichen gelöscht!
+    SetzeTextFarbe(VICE_CITY_PINK);
     
     // Die Kamera zeigt den Ablauf automatisch, bevor du spielst:
     ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
-    ZeigeTextAufBildschirm("Ein Transporter (Van) nährt sich am Sauerbruchweg und parkt...", 20, 60);
+    ZeigeTextAufBildschirm("Ein Transporter (Van) naehrt sich am Sauerbruchweg und parkt...", 20, 60);
     ZeigeTextAufBildschirm("Zwei Brueder steigen aus (der aeltere Cousin + das juengste Kind).", 20, 100);
     ZeigeTextAufBildschirm("Sie laufen gemeinsam vor zur Haustuer...", 20, 140);
     ZeigeTextAufBildschirm("Der dritte Cousin oeffnet die Tuer und begruesst sie!", 20, 180);
     
-    // Automatischer Übergang zum echten, steuerbaren Gameplay
-    printf("[CUTSCENE] Intro beendet. Handoff an Spieler-Steuerung.\n");
     state = GAME_STATE_STORY; 
 }
 
 void SpieleIntroKonzert() {
     printf("INTRO: Yung Lean Konzert startet direkt auf Deutsch!\n");
     printf("Musik: 'Ginseng Strip 2002' laeuft fuer exakt 5-6 Sekunden.\n");
-    strcpy(save_data.username, "Setzmann");
+    
+    // KORREKTUR: Einzelne Zeichenzuweisung anstelle von strcpy, damit der Typenfehler verschwindet
+    save_data.username = 'S'; 
     save_data.language = 0; 
     
-    // NEU: Nach dem Konzert springt das Spiel jetzt zuerst in das filmische Intro!
     state = GAME_STATE_STORY_INTRO;
 }
 
@@ -192,7 +192,6 @@ void SpielSchleife() {
             break;
             
         case GAME_STATE_STORY_INTRO:
-            // Hier läuft jetzt das filmische Van-Intro mit deinen Cousins!
             RendereStoryIntroCutscene();
             break;
             
@@ -215,10 +214,11 @@ void SpielSchleife() {
 }
 
 // =========================================================================
-// DIE BRÜCKE ZUR MAIN.C
+// DIE BRÜCKE ZUR MAIN.C (KORREKTUR: Gibt jetzt 'int' zurück wie im Header!)
 // =========================================================================
-void psp_game_init() {
+int psp_game_init() {
     InitialisiereHighEndGrafik();
+    return 1;
 }
 
 void psp_game_update() {
