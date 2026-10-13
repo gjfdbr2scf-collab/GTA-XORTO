@@ -1,44 +1,24 @@
-#include "psp_input.h"
+#include "include/psp_input.h"
+#include <stdio.h>
 
-static PSPInputState input_state;
+// Verarbeitet die N64-Joystick-Steuerung für Setzmann in Peine
+void VerarbeiteN64Steuerung(int analogX, int analogY, unsigned int tastenBitmaske) {
+    
+    // 1. Der Analog-Stick steuert die Bewegung vorwärts/rückwärts
+    if (analogY > 50)  printf("Steuerung: Setzmann laeuft VORWAERTS\n");
+    if (analogY < -50) printf("Steuerung: Setzmann laeuft RUECKWAERTS\n");
 
-void psp_input_init(void)
-{
-    input_state.up = 0;
-    input_state.down = 0;
-    input_state.left = 0;
-    input_state.right = 0;
+    // KORREKTUR: Setzmann dreht sich jetzt realistisch im Raum!
+    if (analogX > 50)  printf("Steuerung: Setzmann DREHT SICH nach RECHTS\n");
+    if (analogX < -50) printf("Steuerung: Setzmann DREHT SICH nach LINKS\n");
 
-    input_state.cross = 0;
-    input_state.circle = 0;
-    input_state.square = 0;
-    input_state.triangle = 0;
+    // 2. Der A-Knopf für Interaktionen (Center Shocks im Aldi kaufen, PS5 starten)
+    if (tastenBitmaske & 0x4000) {
+        printf("A-Knopf gedrueckt: Aktion ausfuehren / Kaufen.\n");
+    }
 
-    input_state.start = 0;
-    input_state.select = 0;
-    input_state.l = 0;
-    input_state.r = 0;
-
-    input_state.joystick.x = 0;
-    input_state.joystick.y = 0;
-}
-
-void psp_input_update(void)
-{
-    /*
-     * Die eigentliche PSP-Tasten- und
-     * Joystick-Abfrage kommt in einem
-     * späteren Schritt.
-     */
-}
-
-const PSPInputState *psp_input_get_state(void)
-{
-    return &input_state;
-}
-
-void psp_input_shutdown(void)
-{
-    input_state.joystick.x = 0;
-    input_state.joystick.y = 0;
+    // 3. Der B-Knopf zum Abbrechen oder Menü verlassen
+    if (tastenBitmaske & 0x2000) {
+        printf("B-Knopf gedrueckt: Zurueck / Abbrechen.\n");
+    }
 }
