@@ -48,14 +48,14 @@ extern const unsigned char Music_end[];
 typedef struct {
     unsigned int magic;
     int language;
-    char username[32];
+    char username;
 } SaveData;
 
 typedef enum {
     GAME_STATE_TITLE = 0,
     GAME_STATE_MAIN_MENU,
-    GAME_STATE_STORY_INTRO,
-    GAME_STATE_STORY,
+    GAME_STATE_STORY_INTRO, // Das filmische Intro vor dem Gameplay
+    GAME_STATE_STORY,       // Das eigentliche, interaktive Gameplay
     GAME_STATE_FREE_WORLD,
     GAME_STATE_MULTIPLAYER,
     GAME_STATE_SETTINGS
@@ -71,7 +71,7 @@ static float player_x = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f; // Blickwinkel / Rotation von Setzmann
 
-// Dummy-Funktionen, um die Engine-Schnittstelle sauber zu halten
+// Dummy-Funktionen für die Grafik-Schnittstelle
 void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
 void AktiviereCelShadingKonturen(int aktiv) {}
@@ -81,30 +81,25 @@ void SetzeHintergrundFarbe(unsigned int f) {}
 void SetzeTextFarbe(unsigned int f) {}
 void ZeichneLilaMarkerAufKarte(int x, int y) {}
 void ZeigeTextAufBildschirm(const char* text, int x, int y) {
-    // Gibt den Text im Entwickler-Log aus
     printf("[GRAFIK ANZEIGE] %s\n", text);
 }
 
 /* ========================================================================= */
-/* 1. ROCKSTAR ULTRA-GRAFIKENGINE (KORRIGIERTE HARDWARE-FREISCHALTUNG)       */
+/* 1. UNVERSEHRTE ULTRA-GRAFIKENGINE (Voller Rockstar-Style-Glow)            */
 /* ========================================================================= */
 void InitialisiereHighEndGrafik() {
     sceGuInit();
     sceGuStart(GU_DIRECT, list);
     
-    // REPARATUR: Kantenglättung über den echten Hardware-Tiefenpuffer der PSP aktivieren!
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     
-    // Textur-Filter auf Maximum (Bilinearer Filter macht Wände und den Aldi knackscharf)
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
     
-    // Aktiviert weiche Lichtübergänge für den perfekten Peine-Sonnenuntergang
     sceGuShadeModel(GU_SMOOTH);
     sceGuEnable(GU_LIGHTING);
     sceGuEnable(GU_LIGHT0);
     
-    // Farbsättigung und harten Kontrast im Code verankern
     sceGuClearColor(VICE_CITY_ORANGE); 
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     
@@ -114,16 +109,18 @@ void InitialisiereHighEndGrafik() {
 }
 
 /* ========================================================================= */
-/* 2. IN-GAME MINI-MAP & LILA MISSIONS-MARKER                                */
+/* 2. MINI-MAP & REGIONALES SCHLAUES DESIGN (Sauerbruchweg & Holzbrücke)     */
 /* ========================================================================= */
+void LadeUmgebungsDetailsPeine() {
+    ZeigeTextAufBildschirm("Umgebung: Sauerbruchweg-Haeuser und Startpunkt geladen.", 20, 140);
+    ZeigeTextAufBildschirm("Objekt-Modell: Hertha-Peters-Bruecke (Klassisches Holzdesign aktiv)", 20, 160);
+}
+
 void RenderMiniMap() {
-    // Zeichnet die kreisrunde GPS-Karte auf den Bildschirm (wie bei der PSP)
-    // REPARATUR: 'markerFarbe' wird jetzt korrekt benutzt, damit die Warnung verschwindet
     unsigned int markerFarbe = LILA_MISSION_MARKER;
-    
     if (markerFarbe == LILA_MISSION_MARKER) {
         printf("[HUD ENGINE] Zeichne kreisrunde Mini-Map in Peine...\n");
-        printf("[HUD ENGINE] Platziere lila Missions-Marker bei X: 150, Z: 300\n");
+        printf("[HUD ENGINE] Platziere lila Missions-Marker bei der Hertha-Peters-Bruecke\n");
         ZeichneLilaMarkerAufKarte(150, 300);
     }
 }
@@ -135,10 +132,9 @@ void AktualisiereN64Eingabe() {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
     
-    int analogX = pad.Lx - 128; // Links/Rechts-Achse des Joysticks
-    int analogY = pad.Ly - 128; // Hoch/Runter-Achse des Joysticks
+    int analogX = pad.Lx - 128; 
+    int analogY = pad.Ly - 128; 
 
-    // Vorwärts und Rückwärts laufen
     if (analogY < -30) {
         player_x += sinf(player_yaw) * 0.1f;
         player_z += cosf(player_yaw) * 0.1f;
@@ -148,31 +144,37 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Setzmann dreht sich jetzt exakt um seine eigene Achse (Kein seitliches Rutschen!)
-    if (analogX > 30) {
-        player_yaw += 0.05f; // Dreht den Charakter nach RECHTS
-    }
-    if (analogX < -30) {
-        player_yaw -= 0.05f; // Dreht den Charakter nach LINKS
-    }
+    if (analogX > 30)   player_yaw += 0.05f; 
+    if (analogX < -30)  player_yaw -= 0.05f; 
 }
 
 /* ========================================================================= */
-/* 4. INTRO-KONZERT (Vollautomatisch ohne Namens- oder Sprachabfragen)       */
+/* 4. DAS NEUE FILM-INTRO (Direkt vor dem Story-Gameplay!)                   */
 /* ========================================================================= */
+void RendereStoryIntroCutscene() {
+    SetzeHintergrundFarbe(0x000000);
+    SetzeText放Farbe(VICE_CITY_PINK);
+    
+    // Die Kamera zeigt den Ablauf automatisch, bevor du spielst:
+    ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
+    ZeigeTextAufBildschirm("Ein Transporter (Van) nährt sich am Sauerbruchweg und parkt...", 20, 60);
+    ZeigeTextAufBildschirm("Zwei Brueder steigen aus (der aeltere Cousin + das juengste Kind).", 20, 100);
+    ZeigeTextAufBildschirm("Sie laufen gemeinsam vor zur Haustuer...", 20, 140);
+    ZeigeTextAufBildschirm("Der dritte Cousin oeffnet die Tuer und begruesst sie!", 20, 180);
+    
+    // Automatischer Übergang zum echten, steuerbaren Gameplay
+    printf("[CUTSCENE] Intro beendet. Handoff an Spieler-Steuerung.\n");
+    state = GAME_STATE_STORY; 
+}
+
 void SpieleIntroKonzert() {
     printf("INTRO: Yung Lean Konzert startet direkt auf Deutsch!\n");
     printf("Musik: 'Ginseng Strip 2002' laeuft fuer exakt 5-6 Sekunden.\n");
-    printf("Bild wird dunkel... Musik blendet sanft aus...\n");
-    
-    // Keine nervigen Textfenster. Daten werden laut README direkt im Hintergrund geladen:
     strcpy(save_data.username, "Setzmann");
-    save_data.language = 0; // Standardmäßig Deutsch
+    save_data.language = 0; 
     
-    printf("System: Autorisierung erfolgreich. Springe direkt auf die Bruecke!\n");
-    
-    // Automatischer Wechsel in die Story
-    state = GAME_STATE_STORY;
+    // NEU: Nach dem Konzert springt das Spiel jetzt zuerst in das filmische Intro!
+    state = GAME_STATE_STORY_INTRO;
 }
 
 /* ========================================================================= */
@@ -189,23 +191,40 @@ void SpielSchleife() {
             SpieleIntroKonzert();
             break;
             
+        case GAME_STATE_STORY_INTRO:
+            // Hier läuft jetzt das filmische Van-Intro mit deinen Cousins!
+            RendereStoryIntroCutscene();
+            break;
+            
         case GAME_STATE_STORY:
             AktualisiereN64Eingabe();
-            printf("[GAMEPLAY] Story-Modus: Bruecke -> Aldi-Einkauf (voll interaktiv).\n");
-            RenderMiniMap(); // Die Karte mit dem lila Marker wird gezeichnet!
+            ZeigeTextAufBildschirm("STORY-MODUS: Du steuerst Setzmann. Gehe zur Holzbruecke!", 20, 20);
+            LadeUmgebungsDetailsPeine(); 
+            RenderMiniMap(); 
             break;
             
         case GAME_STATE_FREE_WORLD:
             AktualisiereN64Eingabe();
-            printf("[GAMEPLAY] Free Open World aktiv. Erkunde Peine zu Fuss, mit dem Bus oder Auto.\n");
+            LadeUmgebungsDetailsPeine();
             RenderMiniMap();
-            break;
-            
-        case GAME_STATE_MULTIPLAYER:
-            printf("[MULTIPLAYER] Lokaler Modus aktiv. Genau 3 Spieler verbunden. Keine Server.\n");
             break;
             
         default:
             break;
     }
+}
+
+// =========================================================================
+// DIE BRÜCKE ZUR MAIN.C
+// =========================================================================
+void psp_game_init() {
+    InitialisiereHighEndGrafik();
+}
+
+void psp_game_update() {
+    AktualisiereN64Eingabe();
+}
+
+void psp_game_render() {
+    SpielSchleife();
 }
