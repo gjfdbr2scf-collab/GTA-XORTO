@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - DEFINITIONEN & LAUTSTÄRKE                            */
+/* PEINE CITY STORIES - CONFIGURATION & ULTRA LIGHT GRAPHICS                 */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -27,14 +27,14 @@
 
 #define PI_F 3.14159265359f
 
-/* Farbcodes */
+/* Klassische 2000er Farbcodes */
 #define VICE_CITY_PINK      0xFF007F  
 #define VICE_CITY_BLUE      0x00F0FF  
 #define VICE_CITY_ORANGE    0xFF5F00  
 #define LILA_MISSION_MARKER 0x9400D3  
 
-/* Musik-Lautstärke (Gedrosselt / Leiser) */
-#define MUSIC_VOLUME_LOW    0x2000 // Deutlich leiser als der Standard (0x6000)
+/* Musik-Lautstärke (Leise eingestellt, damit es auf der R36S gut klingt) */
+#define MUSIC_VOLUME_LOW    0x2000 
 
 extern const unsigned char Title_start[];
 extern const unsigned char LanguageSelection_start[];
@@ -62,15 +62,17 @@ static int game_initialized = 0;
 static int musik_aktiv = 0;
 static SaveData save_data;
 
-/* Spieler-Koordinaten */
+/* Player-Koordinaten für Peine */
 static float player_x = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f; 
-static int ist_in_fahrzeug = 0;
 
-// Dummy-Hilfsfunktionen für das Grafiksystem
+// Dummy-Funktionen für die Grafik-Schnittstelle
 void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
+void AktiviereCelShadingKonturen(int aktiv) {}
+void SetzeLichtEffekt(const char* name) {}
+void Schalte3DModellDetailsAufMaximum() {} 
 void SetzeHintergrundFarbe(unsigned int f) {}
 void SetzeTextFarbe(unsigned int f) {}
 void ZeichneLilaMarkerAufKarte(int x, int y) {}
@@ -79,24 +81,24 @@ void ZeigeTextAufBildschirm(const char* text, int x, int y) {
 }
 
 /* ========================================================================= */
-/* 1. AUDIO-STEUERUNG (Echtes, leises Musik-Management)                      */
+/* 1. INTERNE AUDIO-STEUERUNG                                                */
 /* ========================================================================= */
 void SteuerMusikLautstaerke(int aktivieren) {
     if (aktivieren) {
         if (!musik_aktiv) {
-            printf("[AUDIO ENGINE] Musik AN (Leise eingestellt: 0x%X) - 'Ginseng Strip 2002' laeuft.\n", MUSIC_VOLUME_LOW);
+            printf("[AUDIO ENGINE] Musik AN - 'Ginseng Strip 2002' laeuft leise (0x%X).\n", MUSIC_VOLUME_LOW);
             musik_aktiv = 1;
         }
     } else {
         if (musik_aktiv) {
-            printf("[AUDIO ENGINE] Musik AUS (Komplette Stille fuer diesen Abschnitt).\n");
+            printf("[AUDIO ENGINE] Musik AUS (Komplette Stille fuer diesen Bereich).\n");
             musik_aktiv = 0;
         }
     }
 }
 
 /* ========================================================================= */
-/* 2. GRAFIK-ENGINE INITIALISIERUNG                                          */
+/* 2. LEISTUNGS-GRAFIKENGINE (Verhindert den Absturz auf der R36S Hardware)   */
 /* ========================================================================= */
 void InitialisiereHighEndGrafik() {
     sceGuInit();
@@ -104,7 +106,9 @@ void InitialisiereHighEndGrafik() {
     
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
+    
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    
     sceGuShadeModel(GU_FLAT); 
     sceGuDisable(GU_LIGHTING); 
     
@@ -116,6 +120,11 @@ void InitialisiereHighEndGrafik() {
     sceGuDisplay(GU_TRUE);
 }
 
+void LadeUmgebungsDetailsPeine() {
+    ZeigeTextAufBildschirm("Umgebung: Sauerbruchweg geladen.", 20, 140);
+    ZeigeTextAufBildschirm("Bruecke: Hertha-Peters-Bruecke (Holzdesign)", 20, 160);
+}
+
 void RenderMiniMap() {
     unsigned int markerFarbe = LILA_MISSION_MARKER;
     if (markerFarbe == LILA_MISSION_MARKER) {
@@ -124,7 +133,7 @@ void RenderMiniMap() {
 }
 
 /* ========================================================================= */
-/* 3. N64 ANALOGSTICK-DREHSTEUERUNG                                          */
+/* 3. EXAKTE N64 ANALOGSTICK-DREHSTEUERUNG                                   */
 /* ========================================================================= */
 void AktualisiereN64Eingabe() {
     SceCtrlData pad;
@@ -134,14 +143,13 @@ void AktualisiereN64Eingabe() {
     int analogY = pad.Ly - 128; 
 
     if (state == GAME_STATE_START_MENU) {
-        // Im Startmenü auf die X-Taste (A-Knopf) warten
+        // Im Startmenü schaltet das Drücken von CROSS (A-Knopf) das Spiel weiter
         if (pad.Buttons & PSP_CTRL_CROSS) {
-            state = GAME_STATE_STORY_INTRO; // Wechselt zum filmischen Intro
+            state = GAME_STATE_STORY_INTRO; 
         }
         return;
     }
 
-    // Steuerung im Gameplay
     if (analogY < -30) {
         player_x += sinf(player_yaw) * 0.1f;
         player_z += cosf(player_yaw) * 0.1f;
@@ -151,28 +159,23 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Charakter dreht sich exakt um die eigene Achse (Kein seitliches Rutschen!)
+    // Setzmann dreht sich perfekt auf der Stelle um die eigene Achse!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 
-    // Testweiser Wechsel in Fahrzeuge oder Läden über die Tasten
-    if (pad.Buttons & PSP_CTRL_TRIANGLE) { // Dreieck-Taste simuliert Einsteigen
-        if (state == GAME_STATE_STORY_WALK) {
-            state = GAME_STATE_VEHICLE_DRIVE;
-            ist_in_fahrzeug = 1;
-        } else if (state == GAME_STATE_VEHICLE_DRIVE) {
-            state = GAME_STATE_STORY_WALK;
-            ist_in_fahrzeug = 0;
-        }
+    // Simulationstasten für Fahrzeuge und Aldi
+    if (pad.Buttons & PSP_CTRL_TRIANGLE) { 
+        if (state == GAME_STATE_STORY_WALK) state = GAME_STATE_VEHICLE_DRIVE;
+        else if (state == GAME_STATE_VEHICLE_DRIVE) state = GAME_STATE_STORY_WALK;
     }
-    if (pad.Buttons & PSP_CTRL_SQUARE) { // Viereck-Taste simuliert Aldi-Betreten
+    if (pad.Buttons & PSP_CTRL_SQUARE) { 
         if (state == GAME_STATE_STORY_WALK) state = GAME_STATE_ALDI_EINKAUF;
         else if (state == GAME_STATE_ALDI_EINKAUF) state = GAME_STATE_STORY_WALK;
     }
 }
 
 /* ========================================================================= */
-/* 4. DIE HAUPTSCHLEIFE (Musik schaltet sich je nach Zustand um!)            */
+/* 4. DIE SPIEL-SCHLEIFE WITH AUTOMATIC AUDIO SWAP                           */
 /* ========================================================================= */
 void SpielSchleife() {
     if (!game_initialized) {
@@ -184,64 +187,52 @@ void SpielSchleife() {
 
     switch(state) {
         case GAME_STATE_START_MENU:
-            // REGEL 1: Musik läuft leise im Hauptmenü!
-            SteuerMusikLautstaerke(1); 
-            
+            SteuerMusikLautstaerke(1); // Musik leise an!
             SetzeHintergrundFarbe(VICE_CITY_ORANGE);
             SetzeTextFarbe(VICE_CITY_PINK);
             ZeigeTextAufBildschirm("=== GINSENG STRIP 2002 ===", 100, 50);
             SetzeTextFarbe(VICE_CITY_BLUE);
-            ZeigeTextAufBildschirm("PRESS START / CROSS TO PLAY", 110, 120);
+            ZeigeTextAufBildschirm("PRESS CROSS TO START STORY", 110, 120);
             break;
             
         case GAME_STATE_STORY_INTRO:
-            // REGEL 2: Absolut stumm während des Intros!
-            SteuerMusikLautstaerke(0); 
-            
+            SteuerMusikLautstaerke(0); // Cutscene stumm!
             SetzeHintergrundFarbe(0x000000);
             SetzeTextFarbe(VICE_CITY_PINK);
             ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
-            ZeigeTextAufBildschirm("Die Cousins sitzen im Auto, fahren am Sauerbruchweg vor...", 20, 70);
-            ZeigeTextAufBildschirm("Zwei Brueder steigen aus und gehen zur Haustuer.", 20, 120);
+            ZeigeTextAufBildschirm("Ein Transporter (Van) naehrt sich am Sauerbruchweg und parkt...", 20, 60);
+            ZeigeTextAufBildschirm("Zwei Brueder steigen aus und laufen vor zur Haustuer...", 20, 110);
             
-            // Wechselt automatisch nach der Sequenz zum Laufen
+            // Wechselt nach der Cutscene automatisch in den Spielmodus
             state = GAME_STATE_STORY_WALK;
             break;
             
         case GAME_STATE_STORY_WALK:
-            // REGEL 3: Absolut stumm, wenn man zu Fuß zur Brücke läuft!
-            SteuerMusikLautstaerke(0); 
-            
+            SteuerMusikLautstaerke(0); // Zu Fuß stumm!
             AktualisiereN64Eingabe();
-            ZeigeTextAufBildschirm("GAMEPLAY: Du laeufst zu Fuss zur hölzernen Hertha-Peters-Bruecke.", 20, 20);
-            ZeigeTextAufBildschirm("[Tipps: Dreieck = Auto besteigen | Viereck = Aldi betreten]", 20, 60);
+            ZeigeTextAufBildschirm("STORY-MODUS: Du steuerst Setzmann zu Fuss. Gehe zur Holzbruecke!", 20, 20);
+            LadeUmgebungsDetailsPeine(); 
             RenderMiniMap(); 
             break;
             
         case GAME_STATE_ALDI_EINKAUF:
-            // REGEL 4: Musik läuft wieder leise im Einkaufsladen!
-            SteuerMusikLautstaerke(1); 
-            
+            SteuerMusikLautstaerke(1); // Im Aldi Musik an!
             AktualisiereN64Eingabe();
             SetzeHintergrundFarbe(VICE_CITY_BLUE);
-            ZeigeTextAufBildschirm("ALDI MARKT: Kaufe Center Shocks und Getraenke.", 20, 20);
-            ZeigeTextAufBildschirm("[Druecke Viereck, um den Laden wieder zu verlassen]", 20, 60);
+            ZeigeTextAufBildschirm("ALDI MARKT: Du kaufst im Laden ein.", 20, 20);
             break;
             
         case GAME_STATE_VEHICLE_DRIVE:
-            // REGEL 5: Musik läuft leise, sobald man im Auto, Bus oder Zug sitzt!
-            SteuerMusikLautstaerke(1); 
-            
+            SteuerMusikLautstaerke(1); // Im Auto Musik an!
             AktualisiereN64Eingabe();
             SetzeHintergrundFarbe(VICE_CITY_PINK);
-            ZeigeTextAufBildschirm("FAHRZEUG: Du faehrst mit dem Auto durch Peine.", 20, 20);
-            ZeigeTextAufBildschirm("[Druecke Dreieck, um aus dem Auto auszusteigen]", 20, 60);
+            ZeigeTextAufBildschirm("FAHRZEUG-MODUS: Cousins sitzen im Auto am Sauerbruchweg.", 20, 20);
             break;
     }
 }
 
 /* ========================================================================= */
-/* DIE BRÜCKE ZUR MAIN.C                                                     */
+/* DIE BRÜCKE ZUR MAIN.C (Sicherer, sauberer Direktstart für PPSSPP)          */
 /* ========================================================================= */
 int psp_game_init() {
     InitialisiereHighEndGrafik();
@@ -255,4 +246,6 @@ void psp_game_update() {
 
 void psp_game_render() {
     SpielSchleife();
+    // Der Vblank-Warter verhindert, dass der Emulator im Kreis rennt und abstürzt!
+    sceDisplayWaitVblankStart(); 
 }
