@@ -18,8 +18,14 @@
 
 #include "psp_game.h"
 
+// =========================================================================
+// WICHTIG: DIE KERNEL-ERLAUBNIS FÜR DIE R36S HARDWARE!
+// =========================================================================
+PSP_MODULE_INFO("GTAXORTO", 0, 1, 1);                  // Definiert das Spiel im PSP-System
+PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU); // Gibt dem Prozessor die Erlaubnis
+
 /* ========================================================================= */
-/* PEINE CITY STORIES - STABILES HAUPTMENÜ & LEISTUNGS-GRAFIKTEST            */
+/* PEINE CITY STORIES - CONFIGURATION & ULTRA LIGHT GRAPHICS                 */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -52,7 +58,7 @@ typedef struct {
 
 typedef enum {
     GAME_STATE_TITLE = 0,
-    GAME_STATE_MAIN_MENU,   // Bleibt komplett unversehrt für den perfekten Spielstart!
+    GAME_STATE_MAIN_MENU,   
     GAME_STATE_STORY_INTRO, 
     GAME_STATE_STORY,       
     GAME_STATE_FREE_WORLD,  
@@ -69,7 +75,6 @@ static float player_x = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f; 
 
-// Dummy-Funktionen für die Grafik-Schnittstelle
 void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
 void AktiviereCelShadingKonturen(int aktiv) {}
@@ -82,21 +87,15 @@ void ZeigeTextAufBildschirm(const char* text, int x, int y) {
     printf("[GRAFIK ANZEIGE] %s\n", text);
 }
 
-/* ========================================================================= */
-/* 1. GRAFIK-ANPASSUNG (Testweise etwas herabgesetzt für 100 % Flüssigkeit) */
-/* ========================================================================= */
 void InitialisiereHighEndGrafik() {
     sceGuInit();
     sceGuStart(GU_DIRECT, list);
     
-    // Stabilisierter Hardware-Tiefenpuffer (Entlastet die R36S beim Booten)
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     
-    // Standard-Texturfilter für flüssige Performance ohne Absturz-Risiko
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
     
-    // Einfaches Beleuchtungssystem geladen für stabileren Start ins Hauptmenü
     sceGuShadeModel(GU_FLAT); 
     sceGuDisable(GU_LIGHTING); 
     
@@ -108,9 +107,6 @@ void InitialisiereHighEndGrafik() {
     sceGuDisplay(GU_TRUE);
 }
 
-/* ========================================================================= */
-/* 2. MINI-MAP & UMGEBUNG (Sauerbruchweg & Holzbrücke)                       */
-/* ========================================================================= */
 void LadeUmgebungsDetailsPeine() {
     ZeigeTextAufBildschirm("Umgebung: Sauerbruchweg geladen.", 20, 140);
     ZeigeTextAufBildschirm("Bruecke: Hertha-Peters-Bruecke (Holzdesign)", 20, 160);
@@ -123,9 +119,6 @@ void RenderMiniMap() {
     }
 }
 
-/* ========================================================================= */
-/* 3. EXAKTE N64 ANALOGSTICK-DREHSTEUERUNG                                   */
-/* ========================================================================= */
 void AktualisiereN64Eingabe() {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -142,14 +135,10 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Unversehrt: Setzmann dreht sich perfekt auf der Stelle!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 }
 
-/* ========================================================================= */
-/* 4. INTRO-SEKUENZEN & FILMISCHES VAN-INTRO                                 */
-/* ========================================================================= */
 void RendereStoryIntroCutscene() {
     SetzeHintergrundFarbe(0x000000);
     SetzeTextFarbe(VICE_CITY_PINK);
@@ -173,9 +162,6 @@ void SpieleIntroKonzert() {
     state = GAME_STATE_STORY_INTRO;
 }
 
-/* ========================================================================= */
-/* 5. SPIEL-SCHLEIFE (Hauptmenü bleibt vollkommen original und unversehrt)   */
-/* ========================================================================= */
 void SpielSchleife() {
     if (!game_initialized) {
         InitialisiereHighEndGrafik();
@@ -188,7 +174,6 @@ void SpielSchleife() {
             break;
             
         case GAME_STATE_MAIN_MENU:
-            // DAS UNVERSEHRTE ORIGINAL-HAUPTMENÜ!
             printf("[MENUE] Hauptmenue unversehrt geladen. Bereit fuer Spielstart.\n");
             break;
             
@@ -214,9 +199,6 @@ void SpielSchleife() {
     }
 }
 
-// =========================================================================
-// DIE BRÜCKE ZUR MAIN.C (Löst alle Compiler-Fehler auf!)
-// =========================================================================
 int psp_game_init() {
     InitialisiereHighEndGrafik();
     return 1;
