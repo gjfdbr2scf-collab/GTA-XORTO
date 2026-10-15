@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - ENGINE WITH FULL PRELOAD & OPTIMIZED AUDIO           */
+/* PEINE CITY STORIES - DEFINITIONEN & LAUTSTAERKE                           */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -27,13 +27,11 @@
 
 #define PI_F 3.14159265359f
 
-/* Rockstar Vice-City Neon-Farbcodes */
 #define VICE_CITY_PINK      0xFF007F  
 #define VICE_CITY_BLUE      0x00F0FF  
 #define VICE_CITY_ORANGE    0xFF5F00  
 #define LILA_MISSION_MARKER 0x9400D3  
 
-/* Drosselung für angenehme, leise Hintergrundmusik */
 #define MUSIC_VOLUME_LOW    0x2000 
 
 extern const unsigned char Title_start[];
@@ -62,94 +60,53 @@ static int game_initialized = 0;
 static int musik_aktiv = 0;
 static SaveData save_data;
 
-/* Spieler-Koordinaten */
 static float player_x = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f; 
 
-/* Dummy-Schnittstellen */
-void SetzeBildschirmAufloesung(int b, int h) {}
-void SetzeTextureFilter(int typ) {}
-void SetzeHintergrundFarbe(unsigned int f) {}
-void SetzeTextFarbe(unsigned int f) {}
-void ZeichneLilaMarkerAufKarte(int x, int y) {}
-void ZeigeTextAufBildschirm(const char* text, int x, int y) {
-    printf("[RENDER TEXT] %s\n", text);
-}
-
 /* ========================================================================= */
-/* 1. ULTRA-GRAFIKENGINE OPTIMIERUNG                                        */
-/* ========================================================================= */
-void InitialisiereHighEndGrafik() {
-    sceGuInit();
-    sceGuStart(GU_DIRECT, list);
-    
-    sceGuEnable(GU_DEPTH_TEST);
-    sceGuDepthFunc(GU_GEQUAL);
-    
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    
-    sceGuShadeModel(GU_SMOOTH); 
-    sceGuEnable(GU_LIGHTING); 
-    sceGuEnable(GU_LIGHT0); 
-    
-    sceGuClearColor(VICE_CITY_ORANGE); 
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-    
-    sceGuFinish();
-    sceGuSync(0, 0);
-    sceGuDisplay(GU_TRUE);
-}
-
-/* ========================================================================= */
-/* 2. AUTOMATISCHER DATEN-PRELOAD                                            */
-/* ========================================================================= */
-void StarteVollstaendigenDatenPreload() {
-    printf("[PRELOAD START] Lade alle weltweiten Peine-Spieldaten in das RAM...\n");
-    
-    RenderMiniMap();
-    LadeUmgebungsDetailsPeine();
-    
-    save_data.username = 'S'; 
-    save_data.language = 0; 
-    save_data.magic = 0x47325332;
-    
-    printf("[PRELOAD FERTIG] Alle Daten geladen. Freigabe erteilt!\n");
-}
-
-void LadeUmgebungsDetailsPeine() {
-    ZeigeTextAufBildschirm("Umgebung: Sauerbruchweg-Haeuser geladen.", 20, 140);
-    ZeigeTextAufBildschirm("Bruecke: Hertha-Peters-Bruecke (Holzdesign)", 20, 160);
-}
-
-void RenderMiniMap() {
-    unsigned int markerFarbe = LILA_MISSION_MARKER;
-    if (markerFarbe == LILA_MISSION_MARKER) {
-        ZeichneLilaMarkerAufKarte(150, 300);
-    }
-}
-
-/* ========================================================================= */
-/* 3. AUDIO-MANAGEMENT & LAUTSTÄRKE                                          */
+/* INTERNE STEUERUNG FÜR DIE LEISE MUSIK                                     */
 /* ========================================================================= */
 void SteuerMusikLautstaerke(int aktivieren) {
     if (aktivieren) {
         if (!musik_aktiv) {
-            printf("[AUDIO ENGINE] Leise Musik AN - 'Ginseng Strip 2002' (Vol: 0x%X).\n", MUSIC_VOLUME_LOW);
+            printf("[AUDIO] Leise Musik AN - Vol: 0x%X\n", MUSIC_VOLUME_LOW);
             musik_aktiv = 1;
         }
     } else {
         if (musik_aktiv) {
-            printf("[AUDIO ENGINE] Musik AUS.\n");
+            printf("[AUDIO] Musik AUS\n");
             musik_aktiv = 0;
         }
     }
 }
 
 /* ========================================================================= */
-/* 4. TASTEN- & JOYSTICK-ABFRAGE                                             */
+/* SYSTEMFUNKTIONEN FÜR DEINE REGELN (DIREKT IN DEN ORIGINAL-SCHLEIFEN)      */
 /* ========================================================================= */
-void AktualisiereN64Eingabe() {
+int psp_game_init() {
+    sceGuInit();
+    sceGuStart(GU_DIRECT, list);
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthFunc(GU_GEQUAL);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuShadeModel(GU_SMOOTH); 
+    sceGuClearColor(VICE_CITY_ORANGE); 
+    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuFinish();
+    sceGuSync(0, 0);
+    sceGuDisplay(GU_TRUE);
+
+    save_data.username = 'S'; 
+    save_data.language = 0; 
+    save_data.magic = 0x47325332;
+
+    state = GAME_STATE_START_MENU; 
+    game_initialized = 1;
+    return 1;
+}
+
+void psp_game_update() {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
     
@@ -163,6 +120,7 @@ void AktualisiereN64Eingabe() {
         return;
     }
 
+    // N64-Analogstick-Laufen
     if (analogY < -30) {
         player_x += sinf(player_yaw) * 0.1f;
         player_z += cosf(player_yaw) * 0.1f;
@@ -172,9 +130,11 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
+    // Setzmann dreht sich perfekt um die eigene Achse (Kein seitliches Rutschen!)
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 
+    // Tasten-Wechsel für Aldi und Fahrzeuge
     if (pad.Buttons & PSP_CTRL_TRIANGLE) { 
         if (state == GAME_STATE_STORY_WALK) state = GAME_STATE_VEHICLE_DRIVE;
         else if (state == GAME_STATE_VEHICLE_DRIVE) state = GAME_STATE_STORY_WALK;
@@ -185,68 +145,30 @@ void AktualisiereN64Eingabe() {
     }
 }
 
-/* ========================================================================= */
-/* 5. GAME LOOP SCHLEIFE                                                     */
-/* ========================================================================= */
-void SpielSchleife() {
-    if (!game_initialized) {
-        InitialisiereHighEndGrafik();
-        StarteVollstaendigenDatenPreload();
-        game_initialized = 1;
-    }
+void psp_game_render() {
+    if (!game_initialized) return;
 
     switch(state) {
         case GAME_STATE_START_MENU:
-            SteuerMusikLautstaerke(1); 
-            ZeigeTextAufBildschirm("=== GINSENG STRIP 2002 ===", 100, 50);
-            ZeigeTextAufBildschirm("PRESS CROSS TO START STORY", 110, 120);
+            SteuerMusikLautstaerke(1); // Im Menü Musik leise an
             break;
             
         case GAME_STATE_STORY_INTRO:
-            SteuerMusikLautstaerke(0); 
-            ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
-            ZeigeTextAufBildschirm("Ein Transporter (Van) naehrt sich am Sauerbruchweg und parkt...", 20, 60);
-            ZeigeTextAufBildschirm("Zwei Brueder steigen aus und laufen vor zur Haustuer...", 20, 110);
+            SteuerMusikLautstaerke(0); // Cutscene stumm
             state = GAME_STATE_STORY_WALK;
             break;
             
         case GAME_STATE_STORY_WALK:
-            SteuerMusikLautstaerke(0); 
-            AktualisiereN64Eingabe();
-            ZeigeTextAufBildschirm("GAMEPLAY: Du laeufst zu Fuss zur hoelzernen Hertha-Peters-Bruecke.", 20, 20);
-            LadeUmgebungsDetailsPeine();
-            RenderMiniMap(); 
+            SteuerMusikLautstaerke(0); // Zu Fuß stumm
             break;
             
         case GAME_STATE_ALDI_EINKAUF:
-            SteuerMusikLautstaerke(1); 
-            AktualisiereN64Eingabe();
-            ZeigeTextAufBildschirm("ALDI MARKT: Du kaufst im Laden ein.", 20, 20);
+            SteuerMusikLautstaerke(1); // Im Aldi Musik an
             break;
             
         case GAME_STATE_VEHICLE_DRIVE:
-            SteuerMusikLautstaerke(1); 
-            AktualisiereN64Eingabe();
-            ZeigeTextAufBildschirm("FAHRZEUG-MODUS: Cousins fahren im Auto.", 20, 20);
+            SteuerMusikLautstaerke(1); // Im Auto Musik an
             break;
     }
-}
-
-/* ========================================================================= */
-/* DIE BRÜCKE ZUR MAIN.C                                                     */
-/* ========================================================================= */
-int psp_game_init() {
-    InitialisiereHighEndGrafik();
-    StarteVollstaendigenDatenPreload();
-    state = GAME_STATE_START_MENU; 
-    return 0; 
-}
-
-void psp_game_update() {
-    AktualisiereN64Eingabe();
-}
-
-void psp_game_render() {
-    SpielSchleife();
     sceDisplayWaitVblankStart(); 
 }
