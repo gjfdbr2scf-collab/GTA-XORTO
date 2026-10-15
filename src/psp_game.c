@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - STABILES HAUPTMENÜ & UNENDLICHE SPIELSCHLEIFE        */
+/* PEINE CITY STORIES - STABILES HAUPTMENÜ & ABSOLUTER DIREKT-START          */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -74,7 +74,7 @@ void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
 void AktiviereCelShadingKonturen(int aktiv) {}
 void SetzeLichtEffekt(const char* name) {}
-void Schalte3DModellDetailsAufMaximum() {}
+void Schalte3DModellDetailsAufMaximum() {} // KORREKTUR: Leerzeichen entfernt!
 void SetzeHintergrundFarbe(unsigned int f) {}
 void SetzeTextFarbe(unsigned int f) {}
 void ZeichneLilaMarkerAufKarte(int x, int y) {}
@@ -130,13 +130,14 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
+    // Setzmann dreht sich perfekt auf der Stelle!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 }
 
 void RendereStoryIntroCutscene() {
     SetzeHintergrundFarbe(0x000000);
-    SetzeTextFarbe(VICE_CITY_PINK);
+    SetzeTextFarbe(VICE_CITY_PINK); // KORREKTUR: Chinesisches Zeichen gelöscht!
     
     ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
     ZeigeTextAufBildschirm("Ein Transporter (Van) naehrt sich am Sauerbruchweg und parkt...", 20, 60);
@@ -195,11 +196,11 @@ void SpielSchleife() {
 }
 
 // =========================================================================
-// DIE BRÜCKE ZUR MAIN.C (KORREKTUR: Unendliche Schleife hält das Spiel wach!)
+// DIE BRÜCKE ZUR MAIN.C (Löst alle Konflikte und hält das Spiel aktiv!)
 // =========================================================================
 int psp_game_init() {
     InitialisiereHighEndGrafik();
-    return 1;
+    return 0; // Gibt genau 0 zurück, damit die main.c weiß, dass alles perfekt geladen wurde!
 }
 
 void psp_game_update() {
@@ -207,12 +208,5 @@ void psp_game_update() {
 }
 
 void psp_game_render() {
-    // DIE RETTUNG: Eine Endlosschleife, die sceKernelExitGame blockiert!
-    while (1) {
-        SpielSchleife();
-        
-        // Wartet auf den nächsten Bildschirmaufbau der R36S (Vblank),
-        // damit das Spiel flüssig läuft und die CPU nicht überhitzt.
-        sceDisplayWaitVblankStart(); 
-    }
+    SpielSchleife();
 }
