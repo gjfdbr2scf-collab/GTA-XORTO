@@ -18,12 +18,6 @@
 
 #include "psp_game.h"
 
-// =========================================================================
-// WICHTIG: DIE KERNEL-ERLAUBNIS FÜR DIE R36S HARDWARE!
-// =========================================================================
-PSP_MODULE_INFO("GTAXORTO", 0, 1, 1);                  // Definiert das Spiel im PSP-System
-PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU); // Gibt dem Prozessor die Erlaubnis
-
 /* ========================================================================= */
 /* PEINE CITY STORIES - CONFIGURATION & ULTRA LIGHT GRAPHICS                 */
 /* ========================================================================= */
@@ -75,6 +69,7 @@ static float player_x = 0.0f;
 static float player_z = 2.0f;
 static float player_yaw = 0.0f; 
 
+// Dummy-Funktionen für die Grafik-Schnittstelle
 void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
 void AktiviereCelShadingKonturen(int aktiv) {}
@@ -135,6 +130,7 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
+    // Setzmann dreht sich perfekt auf der Stelle!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 }
