@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - HIGH-PERFORMANCE ENGINE FÜR R36S (OKTOBER 2026)      */
+/* PEINE CITY STORIES - HIGH-PERFORMANCE ENGINE FÜR R36S                     */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -84,45 +84,37 @@ void InitialisiereHighEndGrafik() {
     sceGuInit();
     sceGuStart(GU_DIRECT, list);
     
-    // Aktiviert den Hardware-Tiefenpuffer (Verhindert 3D-Flackern)
     sceGuEnable(GU_DEPTH_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     
-    // Bilinearer Texturfilter auf Maximum (Entfernt verpixelten Matsch)
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
     
-    // Weiches Shading für Rockstar Neon-Lichteffekte aktivieren
     sceGuShadeModel(GU_SMOOTH); 
     sceGuEnable(GU_LIGHTING); 
     sceGuEnable(GU_LIGHT0); 
     
-    // Setzt die ikonische Hintergrundfarbe
     sceGuClearColor(VICE_CITY_ORANGE); 
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     
     sceGuFinish();
     sceGuSync(0, 0);
     sceGuDisplay(GU_TRUE);
-    
-    printf("[GRAFIK OK] R36S Grafik-Engine erfolgreich auf Maximum optimiert.\n");
 }
 
 /* ========================================================================= */
-/* 2. AUTOMATISCHER DATEN-PRELOAD (Verhindert schwarzen Bildschirm)          */
+/* 2. AUTOMATISCHER DATEN-PRELOAD (KORREKTUR: Sonderzeichen entfernt!)       */
 /* ========================================================================= */
-void FühreVollständigenDatenPreloadAus() {
+void StarteVollstaendigenDatenPreload() {
     printf("[PRELOAD START] Lade alle weltweiten Peine-Spieldaten in das RAM...\n");
     
-    // Zwingt das System, die lila Karten-Marker und Texturen im Speicher bereitzuhalten
     RenderMiniMap();
     LadeUmgebungsDetailsPeine();
     
-    // Datenstrukturen im RAM sicher verankern
     save_data.username = 'S'; 
     save_data.language = 0; 
     save_data.magic = 0x47325332;
     
-    printf("[PRELOAD FERTIG] Alle Daten geladen. Freigabe fuer Grafik-Ausgabe erteilt!\n");
+    printf("[PRELOAD FERTIG] Alle Daten geladen. Freigabe erteilt!\n");
 }
 
 void LadeUmgebungsDetailsPeine() {
@@ -148,7 +140,7 @@ void SteuerMusikLautstaerke(int aktivieren) {
         }
     } else {
         if (musik_aktiv) {
-            printf("[AUDIO ENGINE] Musik AUS (Komplette Stille).\n");
+            printf("[AUDIO ENGINE] Musik AUS.\n");
             musik_aktiv = 0;
         }
     }
@@ -180,11 +172,9 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Setzmann dreht sich perfekt auf der Stelle um die eigene Achse!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 
-    // Simulationstasten für deine Fahrzeug- und Aldi-Regeln
     if (pad.Buttons & PSP_CTRL_TRIANGLE) { 
         if (state == GAME_STATE_STORY_WALK) state = GAME_STATE_VEHICLE_DRIVE;
         else if (state == GAME_STATE_VEHICLE_DRIVE) state = GAME_STATE_STORY_WALK;
@@ -201,7 +191,7 @@ void AktualisiereN64Eingabe() {
 void SpielSchleife() {
     if (!game_initialized) {
         InitialisiereHighEndGrafik();
-        FühreVollständigenDatenPreloadAus();
+        StarteVollstaendigenDatenPreload();
         game_initialized = 1;
     }
 
@@ -243,11 +233,11 @@ void SpielSchleife() {
 }
 
 /* ========================================================================= */
-/* DIE BRÜCKE ZUR MAIN.C (Sicherer, synchronisierter Start)                  */
+/* DIE BRÜCKE ZUR MAIN.C                                                     */
 /* ========================================================================= */
 int psp_game_init() {
     InitialisiereHighEndGrafik();
-    FühreVollständigenDatenPreloadAus();
+    StarteVollstaendigenDatenPreload();
     state = GAME_STATE_START_MENU; 
     return 0; 
 }
