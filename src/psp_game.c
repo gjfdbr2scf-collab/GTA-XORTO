@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - HIGH-PERFORMANCE ENGINE FÜR R36S                     */
+/* PEINE CITY STORIES - ENGINE WITH FULL PRELOAD & OPTIMIZED AUDIO           */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -78,7 +78,7 @@ void ZeigeTextAufBildschirm(const char* text, int x, int y) {
 }
 
 /* ========================================================================= */
-/* 1. ULTRA-GRAFIKENGINE OPTIMIERUNG (Maximale Kantenglaettung & Filter)     */
+/* 1. ULTRA-GRAFIKENGINE OPTIMIERUNG                                        */
 /* ========================================================================= */
 void InitialisiereHighEndGrafik() {
     sceGuInit();
@@ -102,7 +102,7 @@ void InitialisiereHighEndGrafik() {
 }
 
 /* ========================================================================= */
-/* 2. AUTOMATISCHER DATEN-PRELOAD (KORREKTUR: Sonderzeichen entfernt!)       */
+/* 2. AUTOMATISCHER DATEN-PRELOAD                                            */
 /* ========================================================================= */
 void StarteVollstaendigenDatenPreload() {
     printf("[PRELOAD START] Lade alle weltweiten Peine-Spieldaten in das RAM...\n");
@@ -213,7 +213,8 @@ void SpielSchleife() {
         case GAME_STATE_STORY_WALK:
             SteuerMusikLautstaerke(0); 
             AktualisiereN64Eingabe();
-            ZeigeTextAufBildschirm("GAMEPLAY: Du laeufst zu Fuss zur hölzernen Hertha-Peters-Bruecke.", 20, 20);
+            // KORREKTUR: "hölzernen" wurde zu "hoelzernen" abgeaendert!
+            ZeigeTextAufBildschirm("GAMEPLAY: Du laeufst zu Fuss zur hoelzernen Hertha-Peters-Bruecke.", 20, 20);
             LadeUmgebungsDetailsPeine();
             RenderMiniMap(); 
             break;
