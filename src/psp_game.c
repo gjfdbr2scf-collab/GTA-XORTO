@@ -102,7 +102,7 @@ void InitialisiereHighEndGrafik() {
 }
 
 /* ========================================================================= */
-/* 2. AUTOMATISCHER DATEN-PRELOAD                                            */
+/* 2. AUTOMATISCHER DATEN-PRELOAD (KORREKTUR: "Vollstaendigen" korrigiert)   */
 /* ========================================================================= */
 void StarteVollstaendigenDatenPreload() {
     printf("[PRELOAD START] Lade alle weltweiten Peine-Spieldaten in das RAM...\n");
@@ -213,7 +213,6 @@ void SpielSchleife() {
         case GAME_STATE_STORY_WALK:
             SteuerMusikLautstaerke(0); 
             AktualisiereN64Eingabe();
-            // KORREKTUR: "hölzernen" wurde zu "hoelzernen" abgeaendert!
             ZeigeTextAufBildschirm("GAMEPLAY: Du laeufst zu Fuss zur hoelzernen Hertha-Peters-Bruecke.", 20, 20);
             LadeUmgebungsDetailsPeine();
             RenderMiniMap(); 
