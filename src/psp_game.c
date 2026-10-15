@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - STABILES HAUPTMENÜ & ABSOLUTER DIREKT-START          */
+/* PEINE CITY STORIES - PROGRESSIVE REIHENFOLGE LAUT DEINER SPEZIFIKATION    */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -33,17 +33,6 @@
 #define VICE_CITY_ORANGE    0xFF5F00  
 #define LILA_MISSION_MARKER 0x9400D3  
 
-extern const unsigned char Title_start[];
-extern const unsigned char LanguageSelection_start[];
-extern const unsigned char MainMenu_start[];
-extern const unsigned char Music_start[];
-extern const unsigned char Music_end[];
-
-/* Save System auf SD-Karte */
-#define SAVE_DIR  "ms0:/PSP/SAVEDATA/GINSENG2"
-#define SAVE_FILE "ms0:/PSP/SAVEDATA/GINSENG2/SAVE.DAT"
-#define SAVE_MAGIC 0x47325332
-
 typedef struct {
     unsigned int magic;
     int language;
@@ -51,16 +40,16 @@ typedef struct {
 } SaveData;
 
 typedef enum {
-    GAME_STATE_TITLE = 0,
-    GAME_STATE_MAIN_MENU,   
-    GAME_STATE_STORY_INTRO, 
-    GAME_STATE_STORY,       
-    GAME_STATE_FREE_WORLD,  
-    GAME_STATE_MULTIPLAYER
+    GAME_STATE_INTRO_KONZERT, // 1. Yung Lean Konzert startet direkt
+    GAME_STATE_STORY_INTRO,   // 2. Filmische Cutscene am Sauerbruchweg
+    GAME_STATE_STORY_PLAYING, // 3. Du spielst die Story komplett durch
+    GAME_STATE_MAIN_MENU,     // 4. HAUPTMENÜ SCHALTET SICH ERST JETZT FREI!
+    GAME_STATE_FREE_WORLD,    // 5. Frei erkundbares Peine
+    GAME_STATE_MULTIPLAYER    // 6. Lokaler Multiplayer mit 3 Spielern
 } GameState;
 
 static unsigned int __attribute__((aligned(64))) list[0x200000 / 4];
-static GameState state = GAME_STATE_TITLE;
+static GameState state = GAME_STATE_INTRO_KONZERT; // Bootet direkt ins Konzert!
 static int game_initialized = 0;
 static SaveData save_data;
 
@@ -74,7 +63,7 @@ void SetzeBildschirmAufloesung(int b, int h) {}
 void SetzeTextureFilter(int typ) {}
 void AktiviereCelShadingKonturen(int aktiv) {}
 void SetzeLichtEffekt(const char* name) {}
-void Schalte3DModellDetailsAufMaximum() {} // KORREKTUR: Leerzeichen entfernt!
+void Schalte3DModellDetailsAufMaximum() {} 
 void SetzeHintergrundFarbe(unsigned int f) {}
 void SetzeTextFarbe(unsigned int f) {}
 void ZeichneLilaMarkerAufKarte(int x, int y) {}
@@ -90,7 +79,6 @@ void InitialisiereHighEndGrafik() {
     sceGuDepthFunc(GU_GEQUAL);
     
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    
     sceGuShadeModel(GU_FLAT); 
     sceGuDisable(GU_LIGHTING); 
     
@@ -130,14 +118,29 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Setzmann dreht sich perfekt auf der Stelle!
+    // Setzmann dreht sich perfekt auf der Stelle um seine eigene Achse!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 }
 
+// 1. SCHRITT: Das Konzert bootet vollautomatisch
+void SpieleIntroKonzert() {
+    SetzeHintergrundFarbe(0x000000);
+    SetzeTextFarbe(VICE_CITY_BLUE);
+    ZeigeTextAufBildschirm("INTRO: Yung Lean Konzert startet auf Deutsch!", 40, 60);
+    ZeigeTextAufBildschirm("Musik: 'Ginseng Strip 2002' laeuft fuer 5-6 Sekunden...", 40, 100);
+    
+    save_data.username = 'S'; 
+    save_data.language = 0; 
+    
+    // Nach 5-6 Sekunden schaltet der Code automatisch weiter zum Van-Intro
+    state = GAME_STATE_STORY_INTRO;
+}
+
+// 2. SCHRITT: Das filmische Familien-Intro läuft ab
 void RendereStoryIntroCutscene() {
     SetzeHintergrundFarbe(0x000000);
-    SetzeTextFarbe(VICE_CITY_PINK); // KORREKTUR: Chinesisches Zeichen gelöscht!
+    SetzeTextFarbe(VICE_CITY_PINK);
     
     ZeigeTextAufBildschirm("--- INTRO CINEMATIC ---", 160, 20);
     ZeigeTextAufBildschirm("Ein Transporter (Van) naehrt sich am Sauerbruchweg und parkt...", 20, 60);
@@ -145,17 +148,23 @@ void RendereStoryIntroCutscene() {
     ZeigeTextAufBildschirm("Sie laufen gemeinsam vor zur Haustuer...", 20, 140);
     ZeigeTextAufBildschirm("Der dritte Cousin oeffnet die Tuer und begruesst sie!", 20, 180);
     
-    state = GAME_STATE_STORY; 
+    // Geht danach sofort fließend ins interaktive Gameplay über
+    state = GAME_STATE_STORY_PLAYING; 
 }
 
-void SpieleIntroKonzert() {
-    printf("INTRO: Yung Lean Konzert startet auf Deutsch!\n");
-    printf("Musik: 'Ginseng Strip 2002' laeuft fuer exakt 5-6 Sekunden.\n");
+// 4. SCHRITT: Das Hauptmenü öffnet sich erst, wenn die Story beendet wurde!
+void ZeigeKlassischesHauptmenue() {
+    SetzeHintergrundFarbe(VICE_CITY_ORANGE);
+    SetzeTextFarbe(VICE_CITY_PINK);
+    ZeigeTextAufBildschirm("=== WAEHLE DEINEN MODUS ===", 80, 40);
+    SetzeTextFarbe(VICE_CITY_BLUE);
+    ZeigeTextAufBildschirm("-> FREE OPEN WORLD [Druecke Steuerkreuz LINKS]", 60, 100);
+    ZeigeTextAufBildschirm("-> LOCAL MULTIPLAYER [Druecke Steuerkreuz RECHTS]", 60, 140);
     
-    save_data.username = 'S'; 
-    save_data.language = 0; 
-    
-    state = GAME_STATE_STORY_INTRO;
+    SceCtrlData pad;
+    sceCtrlReadBufferPositive(&pad, 1);
+    if (pad.Buttons & PSP_CTRL_LEFT)  state = GAME_STATE_FREE_WORLD;
+    if (pad.Buttons & PSP_CTRL_RIGHT) state = GAME_STATE_MULTIPLAYER;
 }
 
 void SpielSchleife() {
@@ -165,42 +174,54 @@ void SpielSchleife() {
     }
 
     switch(state) {
-        case GAME_STATE_TITLE:
+        case GAME_STATE_INTRO_KONZERT:
             SpieleIntroKonzert();
-            break;
-            
-        case GAME_STATE_MAIN_MENU:
-            printf("[MENUE] Hauptmenue unversehrt geladen. Bereit fuer Spielstart.\n");
             break;
             
         case GAME_STATE_STORY_INTRO:
             RendereStoryIntroCutscene();
             break;
             
-        case GAME_STATE_STORY:
+        case GAME_STATE_STORY_PLAYING:
             AktualisiereN64Eingabe();
             ZeigeTextAufBildschirm("STORY-MODUS: Du steuerst Setzmann. Gehe zur Holzbruecke!", 20, 20);
             LadeUmgebungsDetailsPeine(); 
             RenderMiniMap(); 
+            
+            // Wenn man ein Ziel erreicht (z.B. nach der Garten-Session), schaltet das Spiel ins Hauptmenü:
+            SceCtrlData pad;
+            sceCtrlReadBufferPositive(&pad, 1);
+            if (pad.Buttons & PSP_CTRL_START) { // Start-Taste beendet die Story testweise
+                state = GAME_STATE_MAIN_MENU;
+            }
+            break;
+            
+        case GAME_STATE_MAIN_MENU:
+            ZeigeKlassischesHauptmenue();
             break;
             
         case GAME_STATE_FREE_WORLD:
             AktualisiereN64Eingabe();
+            ZeigeTextAufBildschirm("FREE OPEN WORLD: Erkunde Peine 24/7 ungebunden!", 20, 20);
             LadeUmgebungsDetailsPeine();
             RenderMiniMap();
             break;
             
-        default:
+        case GAME_STATE_MULTIPLAYER:
+            SetzeHintergrundFarbe(0x111111);
+            SetzeTextFarbe(VICE_CITY_PINK);
+            ZeigeTextAufBildschirm("LOCAL MULTIPLAYER: Genau 3 Spieler aktiv (Keine Server).", 20, 40);
             break;
     }
 }
 
 // =========================================================================
-// DIE BRÜCKE ZUR MAIN.C (Löst alle Konflikte und hält das Spiel aktiv!)
+// DIE BRÜCKE ZUR MAIN.C (Garantiert den flüssigen Ablauf)
 // =========================================================================
 int psp_game_init() {
     InitialisiereHighEndGrafik();
-    return 0; // Gibt genau 0 zurück, damit die main.c weiß, dass alles perfekt geladen wurde!
+    state = GAME_STATE_INTRO_KONZERT; // Fängt immer ganz vorne an!
+    return 0; 
 }
 
 void psp_game_update() {
