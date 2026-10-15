@@ -19,7 +19,7 @@
 #include "psp_game.h"
 
 /* ========================================================================= */
-/* PEINE CITY STORIES - CONFIGURATION & ULTRA LIGHT GRAPHICS                 */
+/* PEINE CITY STORIES - STABILES HAUPTMENÜ & UNENDLICHE SPIELSCHLEIFE        */
 /* ========================================================================= */
 #define SCREEN_WIDTH  480
 #define SCREEN_HEIGHT 272
@@ -130,7 +130,6 @@ void AktualisiereN64Eingabe() {
         player_z -= cosf(player_yaw) * 0.1f;
     }
 
-    // Setzmann dreht sich perfekt auf der Stelle!
     if (analogX > 30)   player_yaw += 0.05f; 
     if (analogX < -30)  player_yaw -= 0.05f; 
 }
@@ -195,6 +194,9 @@ void SpielSchleife() {
     }
 }
 
+// =========================================================================
+// DIE BRÜCKE ZUR MAIN.C (KORREKTUR: Unendliche Schleife hält das Spiel wach!)
+// =========================================================================
 int psp_game_init() {
     InitialisiereHighEndGrafik();
     return 1;
@@ -205,5 +207,12 @@ void psp_game_update() {
 }
 
 void psp_game_render() {
-    SpielSchleife();
+    // DIE RETTUNG: Eine Endlosschleife, die sceKernelExitGame blockiert!
+    while (1) {
+        SpielSchleife();
+        
+        // Wartet auf den nächsten Bildschirmaufbau der R36S (Vblank),
+        // damit das Spiel flüssig läuft und die CPU nicht überhitzt.
+        sceDisplayWaitVblankStart(); 
+    }
 }
