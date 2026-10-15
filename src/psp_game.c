@@ -102,7 +102,7 @@ void InitialisiereHighEndGrafik() {
 }
 
 /* ========================================================================= */
-/* 2. AUTOMATISCHER DATEN-PRELOAD (KORREKTUR: "Vollstaendigen" korrigiert)   */
+/* 2. AUTOMATISCHER DATEN-PRELOAD                                            */
 /* ========================================================================= */
 void StarteVollstaendigenDatenPreload() {
     printf("[PRELOAD START] Lade alle weltweiten Peine-Spieldaten in das RAM...\n");
